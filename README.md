@@ -28,7 +28,7 @@ Each language uses an established mutation tool. The tools are installed per pro
 ## Quick start
 
 ```
-/plugin marketplace add gingoa-ai/mutation-gate
+/plugin marketplace add godic97/mutation-gate
 /plugin install mutation-gate@mutation-gate
 ```
 
