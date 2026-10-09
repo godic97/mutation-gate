@@ -8,7 +8,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import diff, gate, nudge, store, tracker
+from . import diff, gate, manifest, nudge, store, tracker
 from .model import kill_active
 
 HOOKS = {
@@ -96,10 +96,10 @@ def _source_files(root, paths):
     return sorted({f for f in listed if diff.classify(f) and (Path(root) / f).is_file()})
 
 
-def _print_verdict(root, v, threshold):
+def _print_verdict(root, v, threshold, label="test"):
     word = {"pass": "PASS", "fail": "FAIL", "error": "ERROR", "unverified": "UNVERIFIED"}[v["status"]]
     allowed = f", {v['allowed']} allowed" if v["allowed"] else ""
-    print(f"mutation-gate test {Path(root).name}: {word} — score {v['score']}% ({v['detected']}/{v['total']}{allowed}), threshold {threshold}%")
+    print(f"mutation-gate {label} {Path(root).name}: {word} — score {v['score']}% ({v['detected']}/{v['total']}{allowed}), threshold {threshold}%")
     if v["survivors"]:
         print("Surviving mutants (the tests still pass with these changes):")
         for s in v["survivors"]:
@@ -135,6 +135,57 @@ def _test(args):
     return {"pass": 0, "fail": 1}.get(verdict["status"], 2)
 
 
+def _load_json(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError) as exc:
+        sys.exit(f"cannot read {path}: {exc}")
+
+
+def _mutate(args):
+    root = _project()
+    cfg = store.load_config()
+    lock = store.repo_lock(root)
+    if not lock.acquire(timeout=gate.LOCK_WAIT):
+        print("Another session is testing this repo — try again shortly")
+        return 2
+    try:
+        verdict = manifest.run(root, _load_json(args.manifest), args.test_cmd, args.budget)
+    finally:
+        lock.release()
+    store.save_verdict("manual-test", root, "manual", verdict)
+    _print_verdict(root, verdict, cfg["threshold"], label="mutate")
+    for s in verdict["survivors"]:
+        if s.get("consequence") or s.get("breaksOn"):
+            print(f"  {s['path']}:{s['line']} — {s.get('consequence', '')} [{s.get('breaksOn', '')}]")
+    for s in verdict.get("skipped", []):
+        print(f"skipped: {s['file']}: {s['reason']}")
+    return {"pass": 0, "fail": 1}.get(verdict["status"], 2)
+
+
+def _verify(args):
+    root = _project()
+    lock = store.repo_lock(root)
+    if not lock.acquire(timeout=gate.LOCK_WAIT):
+        print("Another session is testing this repo — try again shortly")
+        return 2
+    try:
+        result = manifest.verify(root, _load_json(args.spec), args.test_cmd, args.budget)
+    finally:
+        lock.release()
+    print(f"mutation-gate verify: {result['verdict']}" + (f" — {result['reason']}" if result.get("reason") else ""))
+    for key in ("clean", "mutant"):
+        if key in result:
+            print(f"  {key}: {result[key]}")
+    if "siblings_total" in result:
+        print(f"  siblings killed: {result['siblings_killed']}/{result['siblings_total']}")
+    for s in result.get("skipped", []):
+        print(f"  skipped sibling `{s['find']}`: {s['reason']}")
+    if result.get("output"):
+        print(result["output"])
+    return {"accepted": 0, "rejected": 1}.get(result["verdict"], 2)
+
+
 def _mutant_id(text):
     if not re.fullmatch(r"[0-9a-f]{8}", text):
         raise argparse.ArgumentTypeError("a mutant id is 8 hex digits")
@@ -156,6 +207,15 @@ def main(argv=None):
     test = sub.add_parser("test", help="mutation-test whole source files (default: the uncommitted ones)")
     test.add_argument("paths", nargs="*")
     test.add_argument("--budget", type=int, default=540, help="maximum run time in seconds")
+    mutate = sub.add_parser("mutate", help="run mutations written as find/replace edits (LLM mode, any language)")
+    mutate.add_argument("manifest")
+    mutate.add_argument("--test-cmd", help="test command; default: detected from the project")
+    mutate.add_argument("--budget", type=int, default=540, help="maximum run time in seconds")
+    verify = sub.add_parser("verify", help="check a new test: passes clean, fails on the mutant, kills a sibling")
+    verify.add_argument("spec")
+    verify.add_argument("--test-cmd", help="command that runs only the new test")
+    verify.add_argument("--budget", type=int, default=540, help="maximum run time in seconds")
+    sub.add_parser("restore", help="put back files a killed mutate/verify run left mutated")
     sub.add_parser("status", help="settings and the current repo's state")
     sub.add_parser("last", help="details of the last result for the current repo")
     allow = sub.add_parser("allow", help="accept an equivalent mutant so it no longer counts")
@@ -173,6 +233,14 @@ def main(argv=None):
         return _hook(args.event)
     if args.cmd == "test":
         return _test(args)
+    if args.cmd == "mutate":
+        return _mutate(args)
+    if args.cmd == "verify":
+        return _verify(args)
+    if args.cmd == "restore":
+        restored = manifest.restore_all()
+        print("\n".join(f"restored {p}" for p in restored) or "nothing to restore")
+        return 0
     if args.cmd == "status":
         _status(args)
     elif args.cmd == "last":

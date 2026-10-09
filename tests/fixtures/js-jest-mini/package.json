@@ -1,0 +1,9 @@
+{
+  "name": "js-jest-mini",
+  "private": true,
+  "devDependencies": {
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/jest-runner": "10.0.0",
+    "jest": "30.2.0"
+  }
+}

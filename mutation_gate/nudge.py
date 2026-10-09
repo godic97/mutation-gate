@@ -16,15 +16,18 @@ TEST_COMMAND = re.compile(
     r"|\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b"
     r"|\bpython[\d.]*\s+-m\s+pytest\b"
     r"|\b(cargo|go|dotnet|sbt)\s+test\b|\b(mvn|mvnw|gradle|gradlew)\s+(\S+\s+)*test\b|\bgradlew\s+test\b"
+    r"|\brspec\b|\brake\s+test\b|\bphpunit\b|\bctest\b|\bmake\s+(check|test)\b"
 )
-MUTATION_TEST = re.compile(r"\bmutation-gate[\"']?\s+test\b")
+# Test files of languages handled in LLM mode (diff.is_test covers the ones with adapters).
+OTHER_TEST_FILE = re.compile(r"(_spec|_test)\.rb$|Test\.php$|(^|/)test_[^/]*\.(c|cc|cpp)$|_test\.(c|cc|cpp)$")
+MUTATION_TEST = re.compile(r"\bmutation-gate[\"']?\s+(test|mutate|verify)\b")
 REMINDER = (
     "mutation-gate: tests were just written or run. A passing suite does not show that the tests catch bugs. "
     "Before you finish, mutation-test the code under test (the source files, not the test files): run "
     "`mutation-gate test <source files>` as a command of its own (no pipes or `&&`) with a Bash timeout of 600000, "
     "then add assertions until it prints PASS, "
-    "as the mutation-test skill describes. Quote its final summary line. Skip this only if no JS/TS or Python "
-    "source is under test."
+    "as the mutation-test skill describes. Quote its final summary line. For a language mutation-gate has "
+    "no tool for, use LLM mode (`mutation-gate mutate`). Skip this only if no source code is under test."
 )
 
 
@@ -37,7 +40,10 @@ def _relative(path, cwd):
 def _touches_tests(tool, tool_input, cwd):
     if tool in EDIT_TOOLS:
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
-        return isinstance(path, str) and diff.is_test(_relative(path, cwd))
+        if not isinstance(path, str):
+            return False
+        rel = _relative(path, cwd)
+        return diff.is_test(rel) or bool(OTHER_TEST_FILE.search(rel))
     if tool == "Bash":
         return bool(TEST_COMMAND.search(str(tool_input.get("command") or "")))
     return False

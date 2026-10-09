@@ -57,3 +57,19 @@ def test_sessions_are_independent(gate_home):
 @pytest.mark.parametrize("command", ["cargo test", "go test ./...", "mvn test", "./gradlew test", "dotnet test", "sbt test"])
 def test_running_tests_in_other_languages_reminds_claude(gate_home, command):
     assert "mutation-gate test" in context(post("Bash", command=command))
+
+
+@pytest.mark.parametrize("command", ["bundle exec rspec", "rake test", "vendor/bin/phpunit", "ctest --test-dir build", "make test"])
+def test_running_tests_without_an_adapter_still_reminds(gate_home, command):
+    assert "mutation-gate" in context(post("Bash", command=command))
+
+
+@pytest.mark.parametrize("path", ["/p/spec/user_spec.rb", "/p/test/user_test.rb", "/p/tests/UserTest.php", "/p/tests/test_parse.cpp"])
+def test_writing_tests_in_other_languages_reminds(gate_home, path):
+    assert context(post("Write", file_path=path, content="x"))
+
+
+@pytest.mark.parametrize("command", ["mutation-gate mutate /tmp/m.json", "mutation-gate verify /tmp/v.json --test-cmd x"])
+def test_llm_mode_runs_also_end_the_reminders(gate_home, command):
+    assert post("Bash", command=command) is None
+    assert post("Bash", command="pytest") is None

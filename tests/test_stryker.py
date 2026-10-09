@@ -239,3 +239,49 @@ def test_root_vitest_config_with_alias_tests_the_mutated_code(js):
     result = stryker.run(str(js.path), {"src/age.ts": {2}}, budget=120)
 
     assert result.mutants and all(m.status == "detected" for m in result.mutants), result
+
+
+JEST_FIXTURE = Path(__file__).parent / "fixtures" / "js-jest-mini"
+AGE_JS = "function isAdult(age) {\n  return age >= 18;\n}\nmodule.exports = { isAdult };\n"
+
+
+@pytest.fixture
+def jest_repo(repo, gate_home):
+    if not (JEST_FIXTURE / "node_modules" / ".bin" / "stryker").exists():
+        pytest.skip("run tests/setup_fixtures.sh first")
+    shutil.copy(JEST_FIXTURE / "package.json", repo.path / "package.json")
+    os.symlink(JEST_FIXTURE / "node_modules", repo.path / "node_modules")
+    repo.write(".gitignore", "node_modules\n")
+    repo.write("src/age.js", AGE_JS)
+    return repo
+
+
+def test_jest_project_weak_test_leaves_survivors(jest_repo):
+    jest_repo.write("src/age.test.js", 'const { isAdult } = require("./age");\ntest("runs", () => { isAdult(30); });\n')
+
+    result = stryker.run(str(jest_repo.path), {"src/age.js": {2}}, budget=120)
+
+    assert result.error is None and result.failure is None, result
+    assert result.mutants and all(m.status == "undetected" for m in result.mutants)
+
+
+def test_jest_project_strong_test_kills_everything(jest_repo):
+    jest_repo.write("src/age.test.js", 'const { isAdult } = require("./age");\n'
+                    'test("edge", () => { expect(isAdult(17)).toBe(false); expect(isAdult(18)).toBe(true); });\n')
+
+    result = stryker.run(str(jest_repo.path), {"src/age.js": {2}}, budget=120)
+
+    assert result.mutants and all(m.status == "detected" for m in result.mutants), result
+
+
+def test_jest_project_without_jest_runner_gets_jest_install_hint(repo, gate_home):
+    repo.write("package.json", '{"devDependencies": {"jest": "30.2.0"}}')
+    repo.write("node_modules/jest/package.json", "{}")
+    repo.write("node_modules/.bin/stryker", "#!/bin/sh\n")
+    (repo.path / "node_modules/.bin/stryker").chmod(0o755)
+    repo.write(".gitignore", "node_modules\n")
+    repo.write("src/age.js", AGE_JS)
+
+    result = stryker.run(str(repo.path), {"src/age.js": {2}}, budget=30)
+
+    assert result.error_kind == "missing" and "@stryker-mutator/jest-runner" in result.error

@@ -33,7 +33,10 @@ def _run_adapters(repo, by_lang, budget, adapters, full_budget):
     deadline = time.monotonic() + budget
     for lang in sorted(by_lang):
         if lang not in adapters:
-            out["warnings"].append(f"no mutation adapter for {lang} yet: {', '.join(sorted(by_lang[lang]))}")
+            out["warnings"].append(
+                f"no mutation adapter for {lang} yet: {', '.join(sorted(by_lang[lang]))} — "
+                "use LLM mode: write a find/replace manifest and run `mutation-gate mutate` (mutation-test skill)"
+            )
             continue
         remaining = max(1, int(deadline - time.monotonic()))
         result = adapters[lang].run(repo, by_lang[lang], remaining)
@@ -152,11 +155,19 @@ def _project_root(payload):
     return diff.repo_root(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or ".")
 
 
+def _restore_note():
+    from . import manifest  # manifest imports gate
+    restored = manifest.restore_all()
+    return [f"mutation-gate: restored {p} (a mutate/verify run was killed mid-mutation)" for p in restored]
+
+
 def on_session_start(payload):
     store.prune_sessions()
+    lines = _restore_note()
     root = _project_root(payload)
     if root:
         track(payload["session_id"], root)
+    return {"systemMessage": "\n".join(lines)} if lines else None
 
 
 def report_lines(repo, v, threshold):
@@ -186,7 +197,7 @@ def on_stop(payload):
     """Mutation-test this session's changes in every enabled repo and report; never blocks."""
     sid = payload["session_id"]
     cfg = store.load_config()
-    lines = []
+    lines = _restore_note()
     root = _project_root(payload)
     if root and not track(sid, root):
         session = store.load_session(sid)

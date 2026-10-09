@@ -98,6 +98,7 @@ def test_killed_stop_hook_takes_the_tool_processes_with_it(repo, gate_home, tmp_
     pid_file = tmp_path / "child.pid"
     repo.write(".gitignore", "node_modules\n")
     repo.write("node_modules/vitest/package.json", "{}")
+    repo.write("node_modules/@stryker-mutator/vitest-runner/package.json", "{}")
     repo.write("node_modules/.bin/stryker", f"#!/bin/sh\nsleep 60 &\necho $! > {pid_file}\nwait\n")
     (repo.path / "node_modules/.bin/stryker").chmod(0o755)
     repo.write("src/a.ts", "export const a = 1;\n")
@@ -199,3 +200,43 @@ def test_hooks_json_wires_every_event():
     assert set(commands) == {"SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"}
     for event, (command,) in commands.items():
         assert command.startswith('python3 -I "${CLAUDE_PLUGIN_ROOT}/bin/mutation-gate" hook ')
+
+
+def test_mutate_command_reports_llm_mutants(repo, gate_home, tmp_path):
+    _py_project(repo, WEAK)
+    spec = tmp_path / "m.json"
+    spec.write_text(json.dumps({"mutations": [{"file": "src/pkg/age.py", "find": "age >= 18", "replace": "age > 18",
+                                               "consequence": "18 is not adult", "breaksOn": "is_adult(18) -> False"}]}))
+
+    out = cli("mutate", str(spec), cwd=repo.path)
+
+    assert out.returncode == 1, out.stdout + out.stderr
+    assert "mutation-gate mutate" in out.stdout and "FAIL" in out.stdout
+    assert "src/pkg/age.py:2" in out.stdout and "is_adult(18) -> False" in out.stdout
+
+
+def test_verify_command_exit_codes(repo, gate_home, tmp_path):
+    _py_project(repo, STRONG)
+    spec = tmp_path / "v.json"
+    spec.write_text(json.dumps({
+        "mutation": {"file": "src/pkg/age.py", "find": "age >= 18", "replace": "age > 18"},
+        "siblings": [{"file": "src/pkg/age.py", "find": "age >= 18", "replace": "age >= 19"}],
+    }))
+    cmd = ".venv/bin/python -m pytest -q -p no:cacheprovider tests/test_age.py"
+
+    out = cli("verify", str(spec), "--test-cmd", cmd, cwd=repo.path)
+
+    assert out.returncode == 0 and "accepted" in out.stdout, out.stdout + out.stderr
+
+
+def test_session_start_restores_files_a_killed_run_left_mutated(repo, gate_home):
+    from mutation_gate import manifest
+    repo.write("a.py", "x = 1\n")
+    repo.commit()
+    manifest._journal_write(str(repo.path), str(repo.path / "a.py"), b"x = 1\n")
+    repo.write("a.py", "x = 2\n")
+
+    out = cli("hook", "session-start", cwd=repo.path, stdin=json.dumps({"session_id": "r1", "cwd": str(repo.path)}))
+
+    assert (repo.path / "a.py").read_text() == "x = 1\n"
+    assert "restored" in json.loads(out.stdout)["systemMessage"]

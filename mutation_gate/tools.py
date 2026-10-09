@@ -42,3 +42,24 @@ def java_home():
             if os.path.isfile(os.path.join(home, "bin", "java")):
                 return home
     return None
+
+
+# Where user-scope toolchains land; added to PATH for the project's own test commands.
+TOOLCHAIN_DIRS = [
+    "~/.cargo/bin", "~/.local/go/bin", "~/go/bin", "~/.dotnet", "~/.dotnet/tools",
+    "~/.local/opt/apache-maven-*/bin", "~/.local/opt/sbt/bin",
+]
+
+
+def toolchain_env():
+    """Environment for running a project's tests with every user-scope toolchain reachable."""
+    dirs = [d for pattern in TOOLCHAIN_DIRS for d in _expand(pattern)[:1]]
+    extra = {}
+    home = java_home()
+    if home:
+        dirs.insert(0, os.path.join(home, "bin"))
+        extra["JAVA_HOME"] = home
+    dotnet = os.path.expanduser("~/.dotnet")
+    if os.path.isdir(dotnet) and not os.environ.get("DOTNET_ROOT"):
+        extra["DOTNET_ROOT"] = dotnet
+    return env_with(dirs, **extra)
