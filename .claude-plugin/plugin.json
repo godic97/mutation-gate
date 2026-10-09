@@ -6,6 +6,7 @@
     "name": "godic97"
   },
   "repository": "https://github.com/godic97/mutation-gate",
+  "license": "MIT",
   "keywords": [
     "testing",
     "mutation-testing",
