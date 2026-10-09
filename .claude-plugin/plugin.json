@@ -1,7 +1,7 @@
 {
   "name": "mutation-gate",
-  "version": "0.2.0",
-  "description": "Claude Code plugin that won't take Claude's word for its tests: a Stop hook runs mutation testing (Stryker for JS/TS, mutmut for Python) on the lines Claude changed and blocks the turn until the tests kill the mutants.",
+  "version": "0.3.0",
+  "description": "Mutation testing for Claude Code: when Claude tests your code it also runs Stryker (JS/TS) or mutmut (Python) and strengthens the tests until the injected bugs are caught. Optionally reports mutation results for Claude's changes at the end of each turn.",
   "author": {
     "name": "godic97"
   },
@@ -12,6 +12,6 @@
     "mutation-testing",
     "stryker",
     "mutmut",
-    "quality-gate"
+    "test-quality"
   ]
 }

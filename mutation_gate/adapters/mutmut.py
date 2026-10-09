@@ -221,6 +221,13 @@ def run(repo, changed, budget):
             return AdapterResult(unverified=unverified)
         if "could not find any test case for any mutant" in lowered:
             return AdapterResult(failure="바뀐 코드를 실행하는 테스트가 하나도 없음 (mutmut)")
+        if "module name starts with `src.`" in lowered:
+            example = module_name(next(iter(sorted(changed))))
+            return AdapterResult(
+                error=f"테스트가 `src.` 경로로 import함 — mutmut는 이를 추적하지 못함. `from {example} import …`처럼 "
+                      "패키지 이름으로 import하라 (pyproject [tool.pytest.ini_options] pythonpath = [\"src\"])",
+                error_kind="sandbox",
+            )
         if "failed to collect stats" in lowered or "failed to run clean test" in lowered:
             left = max(1, int(deadline - time.monotonic()))
             if _plain_pytest_passes(repo, binary, min(left, 120)):

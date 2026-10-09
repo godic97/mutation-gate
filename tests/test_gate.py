@@ -31,10 +31,10 @@ def ts_change(repo):
     return repo, base
 
 
-def evaluate(repo, base, result, threshold=80, allowed=(), strict=False):
+def evaluate(repo, base, result, threshold=80, allowed=()):
     fake = FakeAdapter(result)
     current = diff.snapshot(repo.path)
-    verdict = gate.evaluate(str(repo.path), base, current, threshold, set(allowed), 60, {"js": fake, "py": fake}, strict)
+    verdict = gate.evaluate(str(repo.path), base, current, threshold, set(allowed), 60, {"js": fake, "py": fake})
     return verdict, fake
 
 
@@ -87,47 +87,34 @@ def test_adapter_error_is_reported_not_failed(ts_change):
     assert verdict["errors"] == ["Stryker가 설치되어 있지 않음"]
 
 
-def test_tool_crash_fails_once_the_tool_has_worked_on_the_repo(ts_change):
-    repo, base = ts_change
-    verdict, _ = evaluate(repo, base, AdapterResult(error="Stryker 실행 실패", error_kind="crash"), strict=True)
-    assert verdict["status"] == "fail"
-    assert "Stryker 실행 실패" in verdict["failures"][0]
 
 
-def test_timeout_stays_a_warning_even_when_strict(ts_change):
-    repo, base = ts_change
-    verdict, _ = evaluate(repo, base, AdapterResult(error="시간 초과", error_kind="timeout"), strict=True)
-    assert verdict["status"] == "error"
-
-
-def test_suppression_comment_fails_even_with_perfect_score(repo):
+def test_added_suppression_comment_is_reported(repo):
     repo.write("src/a.ts", "a\n")
     repo.commit()
     base = diff.snapshot(repo.path)
     repo.write("src/a.ts", "a\n// Stryker disable next-line all\nb\n")
     verdict, _ = evaluate(repo, base, AdapterResult(mutants=[mutant(DETECTED)]))
-    assert verdict["status"] == "fail"
-    assert verdict["suppressions"] == [["src/a.ts", 2, "// Stryker disable next-line all"]]
+    assert verdict["status"] == "pass"
+    assert any("src/a.ts:2" in w for w in verdict["warnings"])
 
 
-def test_skipping_a_test_fails_the_gate(repo):
+def test_skipping_a_test_is_reported(repo):
     repo.write("src/a.test.ts", "it('x', () => {})\n")
     repo.commit()
     base = diff.snapshot(repo.path)
     repo.write("src/a.test.ts", "it.skip('x', () => {})\n")
     verdict, fake = evaluate(repo, base, AdapterResult())
-    assert verdict["status"] == "fail"
-    assert "it.skip" in verdict["failures"][0]
+    assert any("it.skip" in w for w in verdict["warnings"])
 
 
-def test_mutmut_config_change_fails_the_gate(repo):
+def test_mutmut_config_change_is_reported(repo):
     repo.write("pyproject.toml", '[tool.mutmut]\nsource_paths = ["src"]\n')
     repo.commit()
     base = diff.snapshot(repo.path)
     repo.write("pyproject.toml", '[tool.mutmut]\nsource_paths = ["lib"]\n')
     verdict, _ = evaluate(repo, base, AdapterResult())
-    assert verdict["status"] == "fail"
-    assert "pyproject.toml" in verdict["failures"][0]
+    assert any("pyproject.toml" in w for w in verdict["warnings"])
 
 
 def test_deleted_test_file_is_a_warning(repo):
@@ -172,18 +159,6 @@ def test_ignored_mutants_on_changed_lines_are_a_warning(ts_change):
     assert "2" in verdict["warnings"][0]
 
 
-def test_block_reason_tells_claude_what_to_fix():
-    verdict = {
-        "status": "fail", "score": 50.0, "detected": 1, "total": 2, "allowed": 0,
-        "survivors": [{"id": "abcd1234", "path": "src/a.ts", "line": 2, "mutator": "EqualityOperator",
-                       "original": "x < lo", "replacement": "x <= lo"}],
-        "failures": [], "errors": [], "suppressions": [], "warnings": [],
-    }
-    reason = gate.block_reason({"/r/proj": verdict}, threshold=80)
-    assert "src/a.ts:2" in reason and "x < lo → x <= lo" in reason and "abcd1234" in reason
-    assert "50.0%" in reason and "80%" in reason
-    assert "억제" in reason
-
 
 def test_verdict_is_json_serializable(ts_change):
     repo, base = ts_change
@@ -212,21 +187,10 @@ def stop(result, monkeypatch, payload=None):
     return out, fake
 
 
-def test_stop_blocks_and_counts(stop_env, monkeypatch):
-    out, _ = stop(AdapterResult(mutants=[mutant(UNDETECTED)]), monkeypatch)
-    assert out["decision"] == "block"
-    assert "1/3" in out["systemMessage"]
-    assert store.load_session("s1")["blocks"] == 1
-
-
-def test_stop_gives_up_after_max_blocks_with_banner(stop_env, monkeypatch):
-    for _ in range(3):
-        out, _ = stop(AdapterResult(mutants=[mutant(UNDETECTED)]), monkeypatch)
-        assert out["decision"] == "block"
-        stop_env.write("src/a.ts", stop_env.path.joinpath("src/a.ts").read_text() + "x\n")
+def test_stop_reports_survivors_without_blocking(stop_env, monkeypatch):
     out, _ = stop(AdapterResult(mutants=[mutant(UNDETECTED)]), monkeypatch)
     assert "decision" not in out
-    assert "게이트 실패" in out["systemMessage"]
+    assert "✗" in out["systemMessage"] and "src/a.ts:2" in out["systemMessage"] and "x <= lo" in out["systemMessage"]
 
 
 def test_stop_pass_reports_score_to_user(stop_env, monkeypatch):
@@ -252,12 +216,6 @@ def test_stop_caches_timeouts_so_unchanged_code_is_not_rerun(stop_env, monkeypat
     _, fake = stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
     assert fake.calls == []
 
-
-def test_stop_treats_a_crash_after_a_good_run_as_failure(stop_env, monkeypatch):
-    stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
-    stop_env.write("src/a.ts", "a\nBB\n")
-    out, _ = stop(AdapterResult(error="Stryker 실행 실패", error_kind="crash"), monkeypatch)
-    assert out["decision"] == "block"
 
 
 def test_stop_error_warns_without_blocking(stop_env, monkeypatch):
@@ -306,7 +264,7 @@ def test_stop_keeps_checking_other_repos_when_one_crashes(stop_env, monkeypatch,
 
     out, _ = stop(AdapterResult(mutants=[mutant(UNDETECTED)]), monkeypatch)
 
-    assert out["decision"] == "block"
+    assert "✗" in out["systemMessage"]
     assert "broken" in out["systemMessage"] and "⚠" in out["systemMessage"]
 
 
@@ -316,28 +274,6 @@ def test_stop_warns_when_work_was_stashed(stop_env, monkeypatch):
     assert "stash" in out["systemMessage"]
 
 
-def test_stop_warns_when_gate_config_changed_during_session(stop_env, monkeypatch):
-    store.update_config(threshold=10)
-    out, _ = stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
-    assert "설정" in out["systemMessage"]
-
-
-def test_stop_fails_when_plugin_files_changed_during_session(repo, gate_home, monkeypatch, tmp_path):
-    plugin = tmp_path / "plugin"
-    (plugin / "mutation_gate").mkdir(parents=True)
-    (plugin / "mutation_gate" / "gate.py").write_text("original")
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
-    repo.write("src/a.ts", "a\n")
-    repo.commit()
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(repo.path))
-    store.set_enabled(str(repo.path.resolve()), True)
-    gate.on_session_start({"session_id": "s1", "cwd": str(repo.path)})
-    (plugin / "mutation_gate" / "gate.py").write_text("THRESHOLD = 0")
-
-    out, _ = stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
-
-    assert out["decision"] == "block"
-    assert "플러그인" in out["reason"]
 
 
 def test_stop_reports_busy_repo_without_caching(stop_env, monkeypatch):
@@ -348,11 +284,6 @@ def test_stop_reports_busy_repo_without_caching(stop_env, monkeypatch):
     _, fake = stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
     assert len(fake.calls) == 1
 
-
-def test_prompt_submit_resets_block_counter(gate_home):
-    store.bump_blocks("s1")
-    gate.on_prompt({"session_id": "s1"})
-    assert store.load_session("s1")["blocks"] == 0
 
 
 def test_session_start_snapshots_enabled_project(repo, gate_home, monkeypatch):
@@ -370,3 +301,17 @@ def test_session_start_ignores_projects_that_are_not_enabled(repo, gate_home, mo
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(repo.path))
     gate.on_session_start({"session_id": "s1", "cwd": str(repo.path)})
     assert store.load_session("s1")["repos"] == {}
+
+
+
+def test_stop_never_blocks_even_when_tests_fail(stop_env, monkeypatch):
+    out, _ = stop(AdapterResult(failure="테스트가 현재 실패함"), monkeypatch)
+    assert "decision" not in out
+    assert "테스트가 현재 실패함" in out["systemMessage"]
+
+
+def test_stop_lists_only_the_first_survivors(stop_env, monkeypatch):
+    mutants = [mutant(UNDETECTED, replacement=f"r{i}") for i in range(9)]
+    out, _ = stop(AdapterResult(mutants=mutants), monkeypatch)
+    assert out["systemMessage"].count("src/a.ts:2") == gate.BANNER_SURVIVORS
+    assert "mutation-gate last" in out["systemMessage"]

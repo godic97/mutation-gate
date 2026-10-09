@@ -245,3 +245,12 @@ def test_committed_marker_does_not_get_mutants_dir_deleted(py):
 
     assert result.error and "mutants/" in result.error
     assert (py.path / "mutants" / "notes.md").read_text() == "keep me\n"
+
+
+def test_tests_importing_through_src_get_a_precise_hint(py):
+    py.write("tests/test_age.py", STRONG_TEST.replace("from pkg.age", "from src.pkg.age"))
+
+    result = mutmut.run(str(py.path), {"src/pkg/age.py": {2}}, budget=120)
+
+    assert result.error and "src." in result.error and "from pkg.age" in result.error
+    assert "also_copy" not in result.error

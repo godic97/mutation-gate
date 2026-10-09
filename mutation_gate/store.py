@@ -8,7 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 
-DEFAULTS = {"threshold": 80, "max_blocks": 3, "budget_seconds": 480, "enabled": []}
+DEFAULTS = {"threshold": 80, "budget_seconds": 480, "enabled": []}
 # The Stop hook times out at 600 s; keep the budget well inside it.
 BUDGET_RANGE = (60, 540)
 
@@ -117,7 +117,6 @@ def load_config():
     raw = _read(home() / "config.json", {})
     cfg = {**DEFAULTS, **(raw if isinstance(raw, dict) else {})}
     cfg["threshold"] = _int_in(cfg["threshold"], 0, 100, DEFAULTS["threshold"])
-    cfg["max_blocks"] = _int_in(cfg["max_blocks"], 1, 100, DEFAULTS["max_blocks"])
     budget = cfg["budget_seconds"]
     if isinstance(budget, bool) or not isinstance(budget, int):
         budget = DEFAULTS["budget_seconds"]
@@ -179,7 +178,6 @@ def load_session(session_id):
     if not isinstance(data, dict):
         data = {}
     data.setdefault("repos", {})
-    data.setdefault("blocks", 0)
     data.setdefault("verdicts", {})
     return data
 
@@ -202,16 +200,6 @@ def remember_repo(session_id, repo, base):
     _mutate_session(session_id, lambda d: d["repos"].setdefault(repo, base))
 
 
-def bump_blocks(session_id):
-    def bump(d):
-        d["blocks"] += 1
-        return d["blocks"]
-    return _mutate_session(session_id, bump)
-
-
-def reset_blocks(session_id):
-    if load_session(session_id)["blocks"]:
-        _mutate_session(session_id, lambda d: d.__setitem__("blocks", 0))
 
 
 def cached_verdict(session_id, repo, fp):
@@ -233,11 +221,3 @@ def prune_sessions(days=14):
                 path.unlink()
         except OSError:
             pass
-
-
-def update_repo(session_id, repo, **fields):
-    def apply(d):
-        entry = d["repos"].get(repo)
-        if isinstance(entry, dict):
-            entry.update(fields)
-    _mutate_session(session_id, apply)

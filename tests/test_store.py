@@ -12,7 +12,6 @@ from mutation_gate import store
 def test_config_defaults_when_file_missing(gate_home):
     cfg = store.load_config()
     assert cfg["threshold"] == 80
-    assert cfg["max_blocks"] == 3
     assert cfg["budget_seconds"] == 480
     assert cfg["enabled"] == []
 
@@ -35,7 +34,6 @@ def test_projects_are_off_until_enabled(gate_home):
 @pytest.mark.parametrize("raw, key, expected", [
     ({"threshold": 150}, "threshold", 80),
     ({"threshold": "x"}, "threshold", 80),
-    ({"max_blocks": 0}, "max_blocks", 3),
     ({"budget_seconds": 5}, "budget_seconds", 60),
     ({"budget_seconds": 9999}, "budget_seconds", 540),
 ])
@@ -60,12 +58,6 @@ def test_session_records_first_base_per_repo_only(gate_home):
 
     assert store.load_session("s1")["repos"] == {"/repo": "base1", "/other": "base3"}
 
-
-def test_session_block_counter_resets(gate_home):
-    assert store.bump_blocks("s1") == 1
-    assert store.bump_blocks("s1") == 2
-    store.reset_blocks("s1")
-    assert store.load_session("s1")["blocks"] == 0
 
 
 def test_cached_verdict_round_trip(gate_home):

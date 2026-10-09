@@ -8,13 +8,12 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import diff, gate, guard, store
+from . import diff, gate, store, tracker
 from .model import kill_active
 
 HOOKS = {
     "session-start": gate.on_session_start,
-    "prompt": gate.on_prompt,
-    "pre-tool": guard.on_pre_tool,
+    "pre-tool": tracker.on_pre_tool,
     "stop": gate.on_stop,
 }
 
@@ -32,7 +31,7 @@ def _hook(event):
     try:
         result = HOOKS[event](json.loads(sys.stdin.read()))
     except Exception:
-        # Never fail silently: the user sees the crash, and Claude is not blocked by a gate bug.
+        # Never fail silently: the user sees the crash.
         detail = traceback.format_exc(limit=3).strip().splitlines()[-1]
         result = {"systemMessage": f"mutation-gate 내부 오류 ({event}): {detail}"}
     if result:
@@ -50,7 +49,7 @@ def _project():
 def _status(_args):
     cfg = store.load_config()
     root = diff.repo_root(Path.cwd())
-    print(f"threshold {cfg['threshold']}% · 최대 차단 {cfg['max_blocks']}회 · 시간 예산 {cfg['budget_seconds']}초")
+    print(f"threshold {cfg['threshold']}% · 시간 예산 {cfg['budget_seconds']}초")
     print(f"설정 위치 {store.home()}")
     if root:
         print(f"{root}: {'켜짐' if store.is_enabled(root) else '꺼짐'}")

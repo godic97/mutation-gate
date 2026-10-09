@@ -253,3 +253,11 @@ def test_same_size_edit_right_after_commit_is_seen(repo):
         base = diff.snapshot(repo.path)
         repo.write("src/a.py", "x > 5\n")
         assert changes(repo, base).added == {"src/a.py": {1: "x > 5"}}
+
+
+def test_marker_words_inside_strings_are_not_suppressions():
+    added = {
+        "mutation_gate/gate.py": {125: '    "- 억제 주석(Stryker disable, pragma: no mutate)은 금지."'},
+        "src/msg.ts": {3: 'const help = "never add Stryker disable comments";'},
+    }
+    assert diff.find_suppressions(added) == []

@@ -1,5 +1,5 @@
 {
-  "description": "mutation-gate: records changed repos, guards the gate's own files, and runs mutation testing when Claude tries to stop",
+  "description": "mutation-gate: snapshots the repos Claude touches and reports mutation-test results for its changes at the end of each turn",
   "hooks": {
     "SessionStart": [
       {
@@ -12,20 +12,9 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/bin/mutation-gate\" hook prompt",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__.*",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",

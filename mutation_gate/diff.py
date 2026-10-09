@@ -32,10 +32,11 @@ JS_SUPPORT_NAME = re.compile(r"\.(stories|story|test-utils|fixture|fixtures)\.|^
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
-# Markers that silence mutants. Adding any of them is treated as tampering.
+# Markers that silence mutants, only where the tools read them: inside a comment. Adding any of
+# them is treated as tampering; the same words inside a string are not.
 INLINE_SUPPRESSIONS = [
-    re.compile(r"stryker\s+disable", re.IGNORECASE),
-    re.compile(r"pragma:\s*no\s+mutate", re.IGNORECASE),
+    re.compile(r"(//|/\*)\s*stryker\s+disable", re.IGNORECASE),
+    re.compile(r"#\s*pragma:\s*no\s+mutate", re.IGNORECASE),
 ]
 CONFIG_FILES = {"pyproject.toml", "setup.cfg", "mutmut.toml"}
 # mutmut 3 settings that change which mutants exist or how they are judged.

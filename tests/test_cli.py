@@ -48,13 +48,6 @@ def test_status_shows_settings(repo, gate_home):
     assert "threshold 80%" in out and "abcd1234" in out and "켜짐" in out
 
 
-def test_pre_tool_hook_denies_through_stdin(repo, gate_home):
-    payload = {"session_id": "s1", "cwd": str(repo.path), "tool_name": "Bash",
-               "tool_input": {"command": "mutation-gate allow abcd1234 x"}}
-    out = cli("hook", "pre-tool", cwd=repo.path, stdin=json.dumps(payload))
-    assert out.returncode == 0
-    assert json.loads(out.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
-
 
 def test_pre_tool_hook_prints_nothing_when_allowed(repo, gate_home):
     payload = {"session_id": "s1", "cwd": str(repo.path), "tool_name": "Bash", "tool_input": {"command": "ls"}}
@@ -68,7 +61,7 @@ def test_hook_crash_is_reported_to_user_not_swallowed(repo, gate_home):
     assert "mutation-gate 내부 오류" in json.loads(out.stdout)["systemMessage"]
 
 
-def test_stop_hook_end_to_end_blocks_weak_python_test(repo, gate_home):
+def test_stop_hook_end_to_end_reports_weak_python_test(repo, gate_home):
     fixture = Path(__file__).parent / "fixtures" / "py-mini" / ".venv"
     repo.write("pyproject.toml", '[project]\nname = "p"\nversion = "0"\n\n[tool.pytest.ini_options]\npythonpath = ["src"]\n')
     repo.write("src/pkg/__init__.py", "")
@@ -85,8 +78,8 @@ def test_stop_hook_end_to_end_blocks_weak_python_test(repo, gate_home):
     out = cli("hook", "stop", cwd=repo.path, env=env, stdin=json.dumps({"session_id": "e2e", "cwd": str(repo.path)}))
 
     result = json.loads(out.stdout)
-    assert result["decision"] == "block", out.stdout + out.stderr
-    assert "src/pkg/age.py:2" in result["reason"]
+    assert "decision" not in result, out.stdout + out.stderr
+    assert "src/pkg/age.py:2" in result["systemMessage"]
     assert str(repo.path.resolve()) in store.load_session("e2e")["repos"]
 
     last = cli("last", cwd=repo.path).stdout

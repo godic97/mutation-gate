@@ -16,9 +16,9 @@ A green test run proves little: a test that asserts nothing passes too. After th
 
    Without arguments it tests the uncommitted source files. Give the Bash tool a timeout of 600000, because a run can take minutes. If `mutation-gate` is not on PATH, run `"${CLAUDE_PLUGIN_ROOT}/bin/mutation-gate" test …` instead.
 3. **Read the report.** Each surviving mutant is a code change the tests did not notice, shown as `file:line [mutator] original → replacement (id …)`.
-4. **Kill the survivors with real assertions.** For each one, add or tighten an assertion that fails on that change: boundary values, exact return values, branch outcomes, error paths. Test behaviour, not implementation details.
+4. **Kill the survivors with real assertions.** For each one, add or tighten an assertion that fails on that change: boundary values, exact return values, branch outcomes, error paths. Test behaviour, not implementation details. In Python, import the code by its package name (`from pkg.mod import f`), not through `src.`: mutmut cannot trace `src.` imports.
 5. **Rerun the same command** until it prints `PASS`, or until only survivors remain that no test can kill (equivalent mutants, such as `x < lo` → `x <= lo` in a clamp that returns `lo` either way).
-6. **Report with evidence.** Quote the final summary line of the command output verbatim. List any remaining survivors with their ids and say why no test can kill them. Only the user can accept them, with `mutation-gate allow <id> <reason>`.
+6. **Report with evidence.** Quote the final summary line of the command output verbatim. List any remaining survivors with their ids and say why no test can kill them. Leave accepting them to the user (`mutation-gate allow <id> <reason>`); do not run that yourself.
 
 Never:
 - add `// Stryker disable` or `# pragma: no mutate` comments, or change mutation-tool settings;
