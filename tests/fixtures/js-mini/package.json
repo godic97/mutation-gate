@@ -1,0 +1,10 @@
+{
+  "name": "js-mini",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/vitest-runner": "10.0.0",
+    "vitest": "4.1.10"
+  }
+}

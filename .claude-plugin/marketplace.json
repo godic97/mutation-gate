@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "mutation-gate",
+  "description": "Mutation-testing gate for Claude Code.",
+  "owner": {
+    "name": "godic97"
+  },
+  "plugins": [
+    {
+      "name": "mutation-gate",
+      "description": "Blocks the end of a turn until tests kill the mutants of the changed lines.",
+      "source": "./",
+      "category": "testing"
+    }
+  ]
+}
