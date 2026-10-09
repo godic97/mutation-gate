@@ -1,6 +1,6 @@
 {
   "name": "mutation-gate",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Mutation testing for Claude Code: when Claude writes or runs tests, it also mutation-tests the code under test (Stryker, mutmut, cargo-mutants, gremlins, PIT, Stryker.NET, Stryker4s, or Claude-written mutants for any other language) and strengthens the tests until the injected bugs are caught.",
   "author": {
     "name": "godic97"

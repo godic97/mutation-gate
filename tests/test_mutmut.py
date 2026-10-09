@@ -174,6 +174,41 @@ def test_parse_show_keeps_removed_lines_that_start_with_dashes():
     assert mutmut._parse_show(text) == (2, "--x", "--x + 1", 1)
 
 
+def test_parse_show_ignores_a_nested_def_below_body_lines():
+    # The hunk starts inside the function: the first def shown is a nested one, not the function's own.
+    text = ("# m.x_segments__mutmut_5: killed\n--- src/m.py\n+++ src/m.py\n@@ -3,7 +3,7 @@\n"
+            "     command = strip(command)\n     out = []\n-    words = []\n+    words = None\n"
+            "     redirect = None\n \n     def close(op):\n")
+    assert mutmut._parse_show(text) == (5, "    words = []", "    words = None", 1)
+
+
+def test_parse_show_anchors_on_def_after_leading_comments():
+    text = "# m: survived\n--- a\n+++ a\n@@ -1,4 +1,4 @@\n # note\n \n def f(x):\n-    return x\n+    return None\n"
+    assert mutmut._parse_show(text) == (4, "    return x", "    return None", 3)
+
+
+def test_locate_picks_the_duplicate_nearest_the_function_offset():
+    src = ["def f():", "    words = []", "    def close():", "        words = []", "    return words"]
+    # A wrong anchor puts the guess off; two lines match; the nearest to lo + offset - 1 wins.
+    assert mutmut._locate(src, 1, 5, 4, 9, "        words = []") == 4
+    assert mutmut._locate(src, 1, 5, 2, 9, "    words = []") == 2
+    assert mutmut._locate(["x = 1", "y", "x = 1"], 1, 3, 2, 9, "x = 1") is None  # equally near: no guess
+
+
+def test_nested_function_with_a_repeated_line_maps(py):
+    src = ("def collect(items):\n    out = []\n    words = []\n\n    def flush():\n        nonlocal words\n"
+           "        out.append(words)\n        words = []\n\n    for item in items:\n        if item:\n"
+           "            words.append(item)\n        else:\n            flush()\n    flush()\n    return out\n")
+    py.write("src/pkg/col.py", src)
+    py.write("tests/test_col.py", "from pkg.col import collect\n\n\ndef test_runs():\n    collect([1, 0, 2])\n")
+
+    result = mutmut.run(str(py.path), {"src/pkg/col.py": set(range(1, 17))}, budget=120)
+
+    assert result.error is None
+    repeated = sorted((m.line, m.replacement) for m in result.mutants if m.original == "words = []")
+    assert repeated == [(3, "words = None"), (8, "words = None")]
+
+
 def test_functions_in_init_are_mutated(py):
     py.write("src/pkg/__init__.py", "def is_adult(age):\n    return age >= 18\n")
     py.write("tests/test_init.py", "from pkg import is_adult\n\n\ndef test_runs():\n    is_adult(30)\n")

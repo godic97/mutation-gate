@@ -100,7 +100,9 @@ def _parse_show(text):
     """(line number within the shown function, original text, replacement text, anchor line).
 
     The shown function can start with comments that libcst keeps attached to it, so the anchor is
-    the first decorator or def line: the one that maps to the function's start in the file.
+    the first decorator or def line: the one that maps to the function's start in the file. It counts
+    only before any other code: a def after code is a nested function, and then the function's own
+    def is above the hunk (anchor 1, as if no comments led the function).
     """
     orig_no = anchor = None
     original = replacement = None
@@ -113,8 +115,11 @@ def _parse_show(text):
         if line_no == 0:  # header lines before the first hunk
             continue
         body = line[1:]
-        if anchor is None and not line.startswith("+") and DEF_LINE.match(body):
-            anchor = line_no
+        if anchor is None and not line.startswith("+"):
+            if DEF_LINE.match(body):
+                anchor = line_no
+            elif body.strip() and not body.lstrip().startswith("#"):
+                anchor = 0  # code before any def
         if line.startswith("-"):
             if original is None:
                 orig_no, original = line_no, body
@@ -128,12 +133,20 @@ def _parse_show(text):
 
 
 def _locate(source_lines, lo, hi, offset, anchor, original):
-    """File line of a mutated line; checks the text and falls back to a unique match in the function."""
+    """File line of a mutated line; checks the text and falls back to matches in the function.
+
+    With several matches (the same line twice in one function), the one nearest the offset counted
+    from the def line wins, unless two are equally near.
+    """
     guess = lo + offset - anchor
     if 1 <= guess <= len(source_lines) and source_lines[guess - 1].strip() == original.strip():
         return guess
     hits = [n for n in range(lo, hi + 1) if source_lines[n - 1].strip() == original.strip()]
-    return hits[0] if len(hits) == 1 else None
+    if len(hits) <= 1:
+        return hits[0] if hits else None
+    near = lo + offset - 1
+    hits.sort(key=lambda n: abs(n - near))
+    return hits[0] if abs(hits[0] - near) < abs(hits[1] - near) else None
 
 
 class _WorkDir:
