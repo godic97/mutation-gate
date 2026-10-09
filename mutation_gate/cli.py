@@ -127,7 +127,7 @@ def _test(args):
     root = _project()
     files = _source_files(root, args.paths)
     if not files:
-        print("No source files to test — give JS/TS or Python source paths (the code under test, not the test files)")
+        print("No source files to test — give the paths of the code under test, not of the test files")
         return 2
     cfg = store.load_config()
     print(f"Testing {len(files)} file(s): {', '.join(files[:10])}{' …' if len(files) > 10 else ''}", flush=True)

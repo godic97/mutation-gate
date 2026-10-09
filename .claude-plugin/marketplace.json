@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "mutation-gate",
-      "description": "Mutation testing for Claude Code: when Claude tests your code it also runs Stryker (JS/TS) or mutmut (Python) and strengthens the tests until the injected bugs are caught. Optionally reports mutation results for Claude's changes at the end of each turn.",
+      "description": "Mutation testing for Claude Code: when Claude writes or runs tests, it also mutation-tests the code under test (Stryker, mutmut, cargo-mutants, gremlins, PIT, Stryker.NET, Stryker4s, or Claude-written mutants for any other language) and strengthens the tests until the injected bugs are caught.",
       "source": "./",
       "category": "testing"
     }
