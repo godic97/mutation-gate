@@ -11,7 +11,7 @@ Supported stacks:
 
 ## What it does
 
-- **When you ask Claude to test.** Ask "test this", "write tests for X" or "테스트해", and the bundled `mutation-test` skill has Claude run the normal tests, then `mutation-gate test <files>`. Claude adds assertions until the surviving mutants die, reruns, and quotes the final result line. You can also start it with `/mutation-gate:mutation-test`.
+- **Whenever Claude writes or runs tests.** Ask "test this", "write tests for X" or "테스트해", or let Claude add tests on its own: when it edits a test file or runs a test command (`pytest`, `vitest`, `npm test`, ...), a `PostToolUse` hook reminds it, once per prompt, to mutation-test the code under test. The bundled `mutation-test` skill then has Claude run `mutation-gate test <files>`, add assertions until the surviving mutants die, rerun, and quote the final result line. You can also start it with `/mutation-gate:mutation-test`.
 - **At the end of each turn, if you turn it on for a repo.** After `mutation-gate on`, a `Stop` hook mutation-tests the lines Claude changed in that repo during the session and shows the result in a banner: `✓` with the score, or `✗` with the surviving mutants. It only reports; it never stops Claude.
 
 ## Quick start
@@ -29,6 +29,12 @@ uv pip install --python .venv/bin/python mutmut                        # Python,
 ```
 
 Then ask Claude to test something. To also get a report at the end of every turn in a repo, run `! mutation-gate on` there.
+
+To let Claude run mutation tests without a permission prompt each time, allow the command in `.claude/settings.json` (or `~/.claude/settings.json`):
+
+```json
+{ "permissions": { "allow": ["Bash(mutation-gate test:*)"] } }
+```
 
 The plugin's `bin/` directory is on the Bash tool's `PATH` while the plugin is enabled, so `mutation-gate` works as a bare command, including with the `!` prefix. For local development, load the checkout with `claude --plugin-dir /path/to/mutation-gate`.
 

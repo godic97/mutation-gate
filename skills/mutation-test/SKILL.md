@@ -14,7 +14,7 @@ A green test run proves little: a test that asserts nothing passes too. After th
    mutation-gate test <source files or directories>
    ```
 
-   Without arguments it tests the uncommitted source files. Give the Bash tool a timeout of 600000, because a run can take minutes. If `mutation-gate` is not on PATH, run `"${CLAUDE_PLUGIN_ROOT}/bin/mutation-gate" test …` instead.
+   Run it as a command of its own: no `command -v` check, no pipes, no `&&`, so a permission rule such as `Bash(mutation-gate test:*)` covers it. Without arguments it tests the uncommitted source files. Give the Bash tool a timeout of 600000, because a run can take minutes. Only if the shell reports `mutation-gate: command not found`, run `"${CLAUDE_PLUGIN_ROOT}/bin/mutation-gate" test …` instead.
 3. **Read the report.** Each surviving mutant is a code change the tests did not notice, shown as `file:line [mutator] original → replacement (id …)`.
 4. **Kill the survivors with real assertions.** For each one, add or tighten an assertion that fails on that change: boundary values, exact return values, branch outcomes, error paths. Test behaviour, not implementation details. In Python, import the code by its package name (`from pkg.mod import f`), not through `src.`: mutmut cannot trace `src.` imports.
 5. **Rerun the same command** until it prints `PASS`, or until only survivors remain that no test can kill (equivalent mutants, such as `x < lo` → `x <= lo` in a clamp that returns `lo` either way).

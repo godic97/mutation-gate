@@ -8,12 +8,14 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import diff, gate, store, tracker
+from . import diff, gate, nudge, store, tracker
 from .model import kill_active
 
 HOOKS = {
     "session-start": gate.on_session_start,
     "pre-tool": tracker.on_pre_tool,
+    "post-tool": nudge.on_post_tool,
+    "prompt": nudge.on_prompt,
     "stop": gate.on_stop,
 }
 

@@ -182,3 +182,20 @@ def test_test_command_result_shows_in_last(repo, gate_home):
     _py_project(repo, WEAK)
     cli("test", "src/pkg/age.py", cwd=repo.path)
     assert "src/pkg/age.py:2" in cli("last", cwd=repo.path).stdout
+
+
+def test_post_tool_hook_reminds_through_stdin(repo, gate_home):
+    payload = {"session_id": "n1", "cwd": str(repo.path), "tool_name": "Bash", "tool_input": {"command": "pytest -q"}}
+    out = cli("hook", "post-tool", cwd=repo.path, stdin=json.dumps(payload))
+    assert "mutation-gate test" in json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"]
+    cli("hook", "prompt", cwd=repo.path, stdin=json.dumps({"session_id": "n1"}))
+    out = cli("hook", "post-tool", cwd=repo.path, stdin=json.dumps(payload))
+    assert out.stdout.strip()
+
+
+def test_hooks_json_wires_every_event():
+    hooks = json.loads((CLI.parent.parent / "hooks" / "hooks.json").read_text())["hooks"]
+    commands = {event: [h["command"] for g in groups for h in g["hooks"]] for event, groups in hooks.items()}
+    assert set(commands) == {"SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"}
+    for event, (command,) in commands.items():
+        assert command.startswith('python3 -I "${CLAUDE_PLUGIN_ROOT}/bin/mutation-gate" hook ')
