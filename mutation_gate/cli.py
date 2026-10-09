@@ -8,8 +8,17 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import diff, gate, manifest, nudge, store, tracker
+from . import diff, gate, manifest, nudge, store, tools, tracker
 from .model import kill_active
+
+# Mutation tools installed per user rather than per project: (command, extra dirs to look in).
+USER_TOOLS = [
+    ("cargo-mutants", ["~/.cargo/bin"]),
+    ("gremlins", ["~/go/bin"]),
+    ("dotnet-stryker", ["~/.dotnet/tools"]),
+    ("mvn", ["~/.local/opt/apache-maven-*/bin"]),
+    ("sbt", ["~/.local/opt/sbt/bin"]),
+]
 
 HOOKS = {
     "session-start": gate.on_session_start,
@@ -256,10 +265,10 @@ def main(argv=None):
         store.set_enabled(root, args.cmd == "on")
         print(f"{root}: {args.cmd}")
         if args.cmd == "on":
-            tools = [t for t in gate.TOOL_PATHS if (Path(root) / t).exists()]
-            print(f"installed tools: {', '.join(tools)}" if tools else
-                  "no mutation tool installed — JS/TS needs @stryker-mutator/core and @stryker-mutator/vitest-runner, "
-                  "Python needs mutmut in .venv")
+            found = [t for t in gate.TOOL_PATHS if (Path(root) / t).exists()]
+            found += [name for name, dirs in USER_TOOLS if tools.find(name, dirs)]
+            print(f"installed tools: {', '.join(found)}" if found else
+                  "no mutation tool installed yet — `mutation-gate test` prints the install command for each language")
     elif args.cmd == "threshold":
         store.update_config(threshold=args.value)
         print(f"threshold {args.value}%")

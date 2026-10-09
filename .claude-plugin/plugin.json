@@ -1,6 +1,6 @@
 {
   "name": "mutation-gate",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Mutation testing for Claude Code: when Claude tests your code it also runs Stryker (JS/TS) or mutmut (Python) and strengthens the tests until the injected bugs are caught. Optionally reports mutation results for Claude's changes at the end of each turn.",
   "author": {
     "name": "godic97"

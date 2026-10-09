@@ -6,10 +6,10 @@ import time
 from pathlib import Path
 
 from . import diff, store
-from .adapters import mutmut, stryker
+from .adapters import cargo_mutants, go_mutation, mutmut, pit, stryker, stryker4s, stryker_net
 from .model import DETECTED
 
-ADAPTERS = {"js": stryker, "py": mutmut}
+ADAPTERS = {"js": stryker, "py": mutmut, "go": go_mutation, "dotnet": stryker_net, "rust": cargo_mutants, "jvm": pit, "scala": stryker4s}
 # Survivors shown in the Stop banner; `mutation-gate last` has the rest.
 BANNER_SURVIVORS = 5
 # Seconds a run waits for another session's run on the same repo before reporting it busy.
@@ -49,7 +49,7 @@ def _run_adapters(repo, by_lang, budget, adapters, full_budget):
         if result.error:
             out["errors"].append(result.error)
     if out["ignored"]:
-        out["warnings"].append(f"{out['ignored']} mutant(s) were not run because of existing suppression comments")
+        out["warnings"].append(f"{out['ignored']} mutant(s) were not run: excluded by suppression comments or the tool's own settings")
     return out
 
 

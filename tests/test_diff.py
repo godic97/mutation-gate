@@ -289,8 +289,30 @@ def test_other_languages_tests_are_not_source(path):
 
 @pytest.mark.parametrize("line", [
     "    #[ignore]", "\tt.Skip(\"later\")", "    @Disabled", "    @Ignore", "    [Fact(Skip = \"x\")]", '  ignore("x") {',
+    "    [Ignore(\"flaky\")]",
 ])
 def test_find_test_skips_in_other_languages(line):
     added = {"src/test/x/ATest.java": {1: line}, "a_test.go": {1: line}, "tests/a.rs": {1: line},
              "tests/A.Tests/ATests.cs": {1: line}, "src/test/scala/ASpec.scala": {1: line}}
     assert diff.find_test_skips(added)
+
+
+def test_scala_suppression_annotation_is_found():
+    added = {"src/main/scala/shop/Price.scala": {3: '  @SuppressWarnings(Array("stryker4s.mutation.EqualityOperator"))'}}
+    assert diff.find_suppressions(added)
+
+
+def test_stryker4s_conf_change_is_a_mutation_config_change(repo):
+    repo.write("stryker4s.conf", "stryker4s {\n  mutate: [\"src/**\"]\n}\n")
+    repo.commit()
+    base = diff.snapshot(repo.path)
+    repo.write("stryker4s.conf", "stryker4s {\n  mutate: [\"src/main/x/**\"]\n}\n")
+    assert diff.mutation_config_changes(repo.path, base) == ["stryker4s.conf"]
+
+
+@pytest.mark.parametrize("line", [
+    '  @SuppressWarnings(Array[String]("stryker4s.mutation.EqualityOperator"))',
+    '    "stryker4s.mutation.BooleanLiteral",',
+])
+def test_scala_suppression_variants_are_found(line):
+    assert diff.find_suppressions({"src/main/scala/shop/Price.scala": {3: line}})

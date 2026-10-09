@@ -240,3 +240,15 @@ def test_session_start_restores_files_a_killed_run_left_mutated(repo, gate_home)
 
     assert (repo.path / "a.py").read_text() == "x = 1\n"
     assert "restored" in json.loads(out.stdout)["systemMessage"]
+
+
+def test_on_lists_user_scope_tools(repo, gate_home, tmp_path):
+    fake_home = tmp_path / "home"
+    tool = fake_home / ".cargo" / "bin" / "cargo-mutants"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+
+    out = cli("on", cwd=repo.path, env={"HOME": str(fake_home), "PATH": "/usr/bin:/bin"}).stdout
+
+    assert "cargo-mutants" in out

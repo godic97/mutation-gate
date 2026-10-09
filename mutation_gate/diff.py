@@ -43,8 +43,11 @@ INLINE_SUPPRESSIONS = [
     re.compile(r"(//|/\*)\s*stryker\s+disable", re.IGNORECASE),
     re.compile(r"#\s*pragma:\s*no\s+mutate", re.IGNORECASE),
     re.compile(r"#\[(mutants::skip|cfg_attr\(test,\s*mutants::skip\))\]"),
+    # Stryker4s reads its suppressions from string literals such as "stryker4s.mutation.EqualityOperator",
+    # wherever the @SuppressWarnings around them is written.
+    re.compile(r"[\"']stryker4s\.mutation"),
 ]
-CONFIG_FILES = {"pyproject.toml", "setup.cfg", "mutmut.toml"}
+CONFIG_FILES = {"pyproject.toml", "setup.cfg", "mutmut.toml", "stryker4s.conf"}
 # mutmut 3 settings that change which mutants exist or how they are judged.
 CONFIG_SUPPRESSIONS = re.compile(
     r"\b(do_not_mutate|do_not_mutate_patterns|only_mutate|mutate_only_covered_lines|source_paths"
@@ -56,7 +59,7 @@ TEST_SKIPS = re.compile(
     r"\b(it|test|describe|suite|context)\.(skip|only|todo|skipIf|runIf)\b"
     r"|\b(xit|xtest|xdescribe|fit|fdescribe)\s*\("
     r"|@pytest\.mark\.(skip|skipif|xfail)\b|\bpytest\.(skip|xfail)\s*\(|\bunittest\.skip"
-    r"|#\[ignore\b|\bt\.Skip(Now|f)?\(|@Disabled\b|@Ignore\b|\bSkip\s*=|\bignore\(\s*\""
+    r"|#\[ignore\b|\bt\.Skip(Now|f)?\(|@Disabled\b|@Ignore\b|\[Ignore\b|\bSkip\s*=|\bignore\(\s*\""
 )
 
 
@@ -255,6 +258,8 @@ def _mutation_section(name, text):
             parser = configparser.ConfigParser(interpolation=None)
             parser.read_string(text)
             return dict(parser["mutmut"]) if parser.has_section("mutmut") else None
+        if name == "stryker4s.conf":  # HOCON: compare the text
+            return hashlib.sha1(text.encode()).hexdigest()
         data = tomllib.loads(text)
         return data.get("tool", {}).get("mutmut") if name == "pyproject.toml" else data
     except (ValueError, configparser.Error):

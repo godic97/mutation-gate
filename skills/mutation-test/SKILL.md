@@ -9,7 +9,7 @@ A green test run proves little: a test that asserts nothing passes too. After th
 
 ## 1. Run the project's normal tests first
 
-Fix failures before going on; mutation testing on a failing suite is meaningless.
+Fix failures before going on; mutation testing on a failing suite is meaningless. If you cannot run them yourself (for example `go`, `cargo` or `dotnet` is not on PATH), go straight on to step 2: `mutation-gate test` finds toolchains installed in user locations (`~/.cargo/bin`, `~/.local/go`, `~/.dotnet`, `~/.local/opt/…`) and runs the suite itself before mutating, reporting failing tests as a failure.
 
 ## 2. Mutation-test the source under test, not the test files
 
