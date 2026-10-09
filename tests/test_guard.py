@@ -1,6 +1,10 @@
+import os
+import threading
+import time
+
 import pytest
 
-from mutation_gate import guard, store
+from mutation_gate import diff, gate, guard, store
 
 
 @pytest.fixture
@@ -23,16 +27,33 @@ def test_ordinary_edit_is_allowed(env, repo):
     assert call("Edit", file_path=str(repo.path / "src/a.ts"), old_string="a", new_string="b") is None
 
 
+def tracked(repo):
+    return store.load_session("s1")["repos"]
+
+
+def enabled(repo):
+    repo.commit()
+    store.set_enabled(str(repo.path.resolve()), True)
+    return str(repo.path.resolve()), diff.snapshot(repo.path)
+
+
 def test_edit_records_repo_base_before_change(env, repo):
-    head = repo.commit()
+    root, snap = enabled(repo)
     call("Write", file_path=str(repo.path / "src" / "new.py"), content="x = 1\n")
-    assert store.load_session("s1")["repos"] == {str(repo.path.resolve()): head}
+    assert tracked(repo)[root]["base"] == snap
+
+
+def test_repos_that_are_not_enabled_are_not_recorded(env, repo):
+    repo.commit()
+    call("Write", file_path=str(repo.path / "src" / "new.py"), content="x = 1\n")
+    call("Bash", cwd=str(repo.path), command="ls")
+    assert tracked(repo) == {}
 
 
 def test_bash_records_repo_of_cwd(env, repo):
-    head = repo.commit()
+    root, snap = enabled(repo)
     call("Bash", cwd=str(repo.path), command="ls")
-    assert store.load_session("s1")["repos"] == {str(repo.path.resolve()): head}
+    assert tracked(repo)[root]["base"] == snap
 
 
 @pytest.mark.parametrize("target", [
@@ -113,15 +134,15 @@ def test_deny_reason_names_the_rule(env, gate_home):
 
 
 def test_bash_records_repo_entered_with_cd(env, repo, tmp_path):
-    head = repo.commit()
+    root, snap = enabled(repo)
     call("Bash", cwd=str(tmp_path), command=f"cd {repo.path.name} && sed -i '' 's/a/b/' src/a.py")
-    assert store.load_session("s1")["repos"] == {str(repo.path.resolve()): head}
+    assert tracked(repo)[root]["base"] == snap
 
 
 def test_bash_records_repo_named_with_git_dash_c(env, repo, tmp_path):
-    head = repo.commit()
+    root, snap = enabled(repo)
     call("Bash", cwd=str(tmp_path), command=f"git -C {repo.path} commit -am x")
-    assert store.load_session("s1")["repos"] == {str(repo.path.resolve()): head}
+    assert tracked(repo)[root]["base"] == snap
 
 
 def test_suppression_marker_in_docs_is_allowed(env):
@@ -179,6 +200,74 @@ def test_bash_running_the_cli_is_denied(env, command):
 
 
 def test_bash_records_repo_of_absolute_path_argument(env, repo, tmp_path):
-    head = repo.commit()
+    root, snap = enabled(repo)
     call("Bash", cwd=str(tmp_path), command=f"sed -i '' 's/a/b/' {repo.path}/src/a.py")
-    assert store.load_session("s1")["repos"] == {str(repo.path.resolve()): head}
+    assert tracked(repo)[root]["base"] == snap
+
+
+def test_deny_checks_run_even_when_recording_fails(env, gate_home, monkeypatch):
+    def broken(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(gate, "track", broken)
+    assert denied(call("Write", file_path=str(gate_home / "allow.json"), content="{}"))
+
+
+def test_mcp_tool_paths_into_the_gate_are_denied(env, gate_home):
+    out = guard.on_pre_tool({"session_id": "s1", "cwd": "/", "tool_name": "mcp__fs__write_file",
+                             "tool_input": {"path": str(gate_home / "config.json"), "content": "{}"}})
+    assert denied(out)
+
+
+def test_mcp_tool_paths_record_enabled_repos(env, repo):
+    root, snap = enabled(repo)
+    guard.on_pre_tool({"session_id": "s1", "cwd": "/", "tool_name": "mcp__fs__write_file",
+                       "tool_input": {"path": str(repo.path / "src" / "a.py"), "content": "x"}})
+    assert tracked(repo)[root]["base"] == snap
+
+
+def test_bash_writing_inside_a_protected_cwd_is_denied(env):
+    assert denied(call("Bash", cwd=str(env), command="echo 'THRESHOLD = 0' > gate.py"))
+
+
+def test_settings_env_pointing_the_gate_elsewhere_is_denied(env, tmp_path):
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"env": {}}')
+    out = call("Edit", file_path=str(settings), old_string='"env": {}', new_string='"env": {"MUTATION_GATE_HOME": "/tmp/x"}')
+    assert denied(out)
+
+
+def test_write_to_a_fifo_does_not_hang(env, tmp_path):
+    fifo = tmp_path / "pipe.py"
+    os.mkfifo(fifo)
+    result = []
+    t = threading.Thread(target=lambda: result.append(call("Write", file_path=str(fifo), content="x = 1")), daemon=True)
+    t.start()
+    t.join(3)
+    assert not t.is_alive()
+
+
+def test_many_cd_targets_stay_fast(env, tmp_path):
+    command = " && ".join(f"cd /nonexistent/d{i}" for i in range(300))
+    start = time.monotonic()
+    call("Bash", cwd=str(tmp_path), command=command)
+    assert time.monotonic() - start < 3
+
+
+@pytest.mark.parametrize("command", [
+    "mutation-gate test src/pkg",
+    "mutation-gate test 2>&1 | tail -40",
+    '"/x/plugins/cache/m/mutation-gate/0.1.0/bin/mutation-gate" test src',
+    "mutation-gate last",
+    "mutation-gate status",
+])
+def test_claude_may_measure_with_the_cli(env, command):
+    assert call("Bash", command=command) is None
+
+
+@pytest.mark.parametrize("command", [
+    '"/x/plugins/cache/m/mutation-gate/0.1.0/bin/mutation-gate" allow abcd1234 x',
+    "mutation-gate test src && mutation-gate off",
+])
+def test_cli_changes_stay_denied_in_any_form(env, command):
+    assert denied(call("Bash", command=command))

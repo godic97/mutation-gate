@@ -1,6 +1,6 @@
 {
   "name": "mutation-gate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Claude Code plugin that won't take Claude's word for its tests: a Stop hook runs mutation testing (Stryker for JS/TS, mutmut for Python) on the lines Claude changed and blocks the turn until the tests kill the mutants.",
   "author": {
     "name": "godic97"

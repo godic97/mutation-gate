@@ -31,16 +31,18 @@ def test_allow_rejects_malformed_id(repo, gate_home):
 
 def test_off_on_and_threshold(repo, gate_home):
     root = str(repo.path.resolve())
-    cli("off", cwd=repo.path)
     assert store.is_enabled(root) is False
     cli("on", cwd=repo.path)
     assert store.is_enabled(root) is True
+    cli("off", cwd=repo.path)
+    assert store.is_enabled(root) is False
     cli("threshold", "90", cwd=repo.path)
     assert store.load_config()["threshold"] == 90
     assert cli("threshold", "150", cwd=repo.path).returncode != 0
 
 
 def test_status_shows_settings(repo, gate_home):
+    cli("on", cwd=repo.path)
     cli("allow", "abcd1234", "reason", cwd=repo.path)
     out = cli("status", cwd=repo.path).stdout
     assert "threshold 80%" in out and "abcd1234" in out and "켜짐" in out
@@ -73,7 +75,8 @@ def test_stop_hook_end_to_end_blocks_weak_python_test(repo, gate_home):
     repo.write("src/pkg/age.py", "def is_adult(age):\n    return age > 0\n")
     repo.write(".gitignore", ".venv\n")
     (repo.path / ".venv").symlink_to(fixture)
-    base = repo.commit()
+    repo.commit()
+    cli("on", cwd=repo.path)
     env = {"CLAUDE_PROJECT_DIR": str(repo.path)}
     cli("hook", "session-start", cwd=repo.path, env=env, stdin=json.dumps({"session_id": "e2e", "cwd": str(repo.path)}))
     repo.write("src/pkg/age.py", "def is_adult(age):\n    return age >= 18\n")
@@ -84,7 +87,105 @@ def test_stop_hook_end_to_end_blocks_weak_python_test(repo, gate_home):
     result = json.loads(out.stdout)
     assert result["decision"] == "block", out.stdout + out.stderr
     assert "src/pkg/age.py:2" in result["reason"]
-    assert store.load_session("e2e")["repos"] == {str(repo.path.resolve()): base}
+    assert str(repo.path.resolve()) in store.load_session("e2e")["repos"]
 
     last = cli("last", cwd=repo.path).stdout
     assert "src/pkg/age.py:2" in last
+
+
+def test_on_reports_whether_the_mutation_tool_is_installed(repo, gate_home):
+    out = cli("on", cwd=repo.path).stdout
+    assert "켜짐" in out and "설치" in out
+
+
+def test_killed_stop_hook_takes_the_tool_processes_with_it(repo, gate_home, tmp_path):
+    import signal
+    import time
+
+    pid_file = tmp_path / "child.pid"
+    repo.write(".gitignore", "node_modules\n")
+    repo.write("node_modules/vitest/package.json", "{}")
+    repo.write("node_modules/.bin/stryker", f"#!/bin/sh\nsleep 60 &\necho $! > {pid_file}\nwait\n")
+    (repo.path / "node_modules/.bin/stryker").chmod(0o755)
+    repo.write("src/a.ts", "export const a = 1;\n")
+    repo.commit()
+    cli("on", cwd=repo.path)
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(repo.path)}
+    cli("hook", "session-start", cwd=repo.path, env=env, stdin=json.dumps({"session_id": "k", "cwd": str(repo.path)}))
+    repo.write("src/a.ts", "export const a = 2;\n")
+
+    hook = subprocess.Popen([sys.executable, str(CLI), "hook", "stop"], cwd=repo.path, env=env,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    hook.stdin.write(json.dumps({"session_id": "k", "cwd": str(repo.path)}))
+    hook.stdin.close()
+    for _ in range(100):
+        if pid_file.exists() and pid_file.read_text().strip():
+            break
+        time.sleep(0.1)
+    hook.send_signal(signal.SIGTERM)
+    hook.wait(10)
+    time.sleep(0.3)
+    child = int(pid_file.read_text())
+    try:
+        os.kill(child, 0)
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    assert not alive
+
+
+def _py_project(repo, test_body):
+    fixture = Path(__file__).parent / "fixtures" / "py-mini" / ".venv"
+    repo.write("pyproject.toml", '[project]\nname = "p"\nversion = "0"\n\n[tool.pytest.ini_options]\npythonpath = ["src"]\n')
+    repo.write("src/pkg/__init__.py", "")
+    repo.write("src/pkg/age.py", "def is_adult(age):\n    return age >= 18\n")
+    repo.write("tests/test_age.py", test_body)
+    repo.write(".gitignore", ".venv\n")
+    (repo.path / ".venv").symlink_to(fixture)
+    repo.commit()
+
+
+WEAK = "from pkg.age import is_adult\n\ndef test_runs():\n    is_adult(30)\n"
+STRONG = "from pkg.age import is_adult\n\ndef test_edge():\n    assert is_adult(17) is False\n    assert is_adult(18) is True\n"
+
+
+def test_test_command_reports_survivors_and_fails(repo, gate_home):
+    _py_project(repo, WEAK)
+
+    out = cli("test", "src/pkg/age.py", cwd=repo.path)
+
+    assert out.returncode == 1, out.stdout + out.stderr
+    assert "FAIL" in out.stdout and "src/pkg/age.py:2" in out.stdout
+
+
+def test_test_command_passes_strong_tests(repo, gate_home):
+    _py_project(repo, STRONG)
+
+    out = cli("test", "src", cwd=repo.path)
+
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "PASS" in out.stdout and "100.0%" in out.stdout
+
+
+def test_test_command_without_paths_uses_uncommitted_source_changes(repo, gate_home):
+    _py_project(repo, WEAK)
+    repo.write("src/pkg/age.py", "def is_adult(age):\n    return age > 17\n")
+
+    out = cli("test", cwd=repo.path)
+
+    assert out.returncode == 1 and "src/pkg/age.py" in out.stdout
+
+
+def test_test_command_with_nothing_to_test_says_so(repo, gate_home):
+    repo.write("README.md", "x\n")
+    repo.commit()
+
+    out = cli("test", cwd=repo.path)
+
+    assert out.returncode == 2 and "검사할 소스" in out.stdout
+
+
+def test_test_command_result_shows_in_last(repo, gate_home):
+    _py_project(repo, WEAK)
+    cli("test", "src/pkg/age.py", cwd=repo.path)
+    assert "src/pkg/age.py:2" in cli("last", cwd=repo.path).stdout

@@ -8,16 +8,31 @@ import tempfile
 import time
 from pathlib import Path
 
-DEFAULTS = {"threshold": 80, "max_blocks": 3, "budget_seconds": 480, "disabled": []}
+DEFAULTS = {"threshold": 80, "max_blocks": 3, "budget_seconds": 480, "enabled": []}
+# The Stop hook times out at 600 s; keep the budget well inside it.
+BUDGET_RANGE = (60, 540)
 
 
 def home():
     return Path(os.environ.get("MUTATION_GATE_HOME", Path.home() / ".config" / "mutation-gate"))
 
 
+def _private_dir(path):
+    """mkdir -p with 0700 on every level under home(): state holds copies of source code."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    base = home()
+    for p in [path, *path.parents]:
+        if p != base and base not in p.parents:
+            break
+        try:
+            os.chmod(p, 0o700)
+        except OSError:
+            pass
+    return path
+
+
 def work_dir(name):
-    path = home() / "state" / "work" / name
-    path.mkdir(parents=True, exist_ok=True)
+    path = _private_dir(home() / "state" / "work" / name)
     # Tools run inside sandboxes here; a symlinked path breaks vitest's related-file lookup.
     return path.resolve()
 
@@ -43,25 +58,26 @@ def _read_strict(path, default):
         raise CorruptFile(f"{path} 파싱 실패 ({exc}). 직접 고친 뒤 다시 실행하라.") from exc
 
 
-class repo_lock:
-    """Exclusive per-repo lock so two sessions never run mutation tools on one repo at once."""
-
-    def __init__(self, repo, blocking=True):
-        name = hashlib.sha1(str(repo).encode()).hexdigest()[:16]
-        self.path = home() / "state" / "locks" / f"{name}.lock"
-        self.blocking = blocking
+class _flock:
+    def __init__(self, path):
+        self.path = path
         self.fd = None
 
-    def acquire(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
-        try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
-        except BlockingIOError:
-            os.close(self.fd)
-            self.fd = None
-            return False
-        return True
+    def acquire(self, timeout=None):
+        """Block until locked, or give up after `timeout` seconds and return False."""
+        _private_dir(self.path.parent)
+        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | (0 if deadline is None else fcntl.LOCK_NB))
+                return True
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    os.close(self.fd)
+                    self.fd = None
+                    return False
+                time.sleep(0.1)
 
     def release(self):
         if self.fd is not None:
@@ -77,16 +93,38 @@ class repo_lock:
         self.release()
 
 
+def repo_lock(repo):
+    """Exclusive per-repo lock so two sessions never run mutation tools on one repo at once."""
+    name = hashlib.sha1(str(repo).encode()).hexdigest()[:16]
+    return _flock(home() / "state" / "locks" / f"{name}.lock")
+
+
 def _write(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _private_dir(path.parent)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
     with os.fdopen(fd, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
 
 
+def _int_in(value, lo, hi, default):
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value if lo <= value <= hi else default
+
+
 def load_config():
-    return {**DEFAULTS, **_read(home() / "config.json", {})}
+    raw = _read(home() / "config.json", {})
+    cfg = {**DEFAULTS, **(raw if isinstance(raw, dict) else {})}
+    cfg["threshold"] = _int_in(cfg["threshold"], 0, 100, DEFAULTS["threshold"])
+    cfg["max_blocks"] = _int_in(cfg["max_blocks"], 1, 100, DEFAULTS["max_blocks"])
+    budget = cfg["budget_seconds"]
+    if isinstance(budget, bool) or not isinstance(budget, int):
+        budget = DEFAULTS["budget_seconds"]
+    cfg["budget_seconds"] = min(max(budget, BUDGET_RANGE[0]), BUDGET_RANGE[1])
+    if not isinstance(cfg["enabled"], list):
+        cfg["enabled"] = []
+    return cfg
 
 
 def update_config(**changes):
@@ -97,14 +135,14 @@ def update_config(**changes):
 
 
 def is_enabled(project):
-    return project not in load_config()["disabled"]
+    return project in load_config()["enabled"]
 
 
 def set_enabled(project, enabled):
-    disabled = [p for p in load_config()["disabled"] if p != project]
-    if not enabled:
-        disabled.append(project)
-    update_config(disabled=sorted(disabled))
+    projects = [p for p in load_config()["enabled"] if p != project]
+    if enabled:
+        projects.append(project)
+    update_config(enabled=sorted(projects))
 
 
 def _allow_path():
@@ -146,35 +184,34 @@ def load_session(session_id):
     return data
 
 
-def _save_session(session_id, data):
-    _write(_session_path(session_id), data)
+def _mutate_session(session_id, fn):
+    """Load, change and save one session file under a lock: hooks of one session run concurrently."""
+    path = _session_path(session_id)
+    with _flock(path.with_suffix(".lock")):
+        data = load_session(session_id)
+        result = fn(data)
+        _write(path, data)
+    return result
 
 
 def set_session_value(session_id, key, value):
-    data = load_session(session_id)
-    data[key] = value
-    _save_session(session_id, data)
+    _mutate_session(session_id, lambda d: d.__setitem__(key, value))
 
 
 def remember_repo(session_id, repo, base):
-    data = load_session(session_id)
-    if repo not in data["repos"]:
-        data["repos"][repo] = base
-        _save_session(session_id, data)
+    _mutate_session(session_id, lambda d: d["repos"].setdefault(repo, base))
 
 
 def bump_blocks(session_id):
-    data = load_session(session_id)
-    data["blocks"] += 1
-    _save_session(session_id, data)
-    return data["blocks"]
+    def bump(d):
+        d["blocks"] += 1
+        return d["blocks"]
+    return _mutate_session(session_id, bump)
 
 
 def reset_blocks(session_id):
-    data = load_session(session_id)
-    if data["blocks"]:
-        data["blocks"] = 0
-        _save_session(session_id, data)
+    if load_session(session_id)["blocks"]:
+        _mutate_session(session_id, lambda d: d.__setitem__("blocks", 0))
 
 
 def cached_verdict(session_id, repo, fp):
@@ -185,6 +222,22 @@ def cached_verdict(session_id, repo, fp):
 
 
 def save_verdict(session_id, repo, fp, verdict):
-    data = load_session(session_id)
-    data["verdicts"][repo] = {"fingerprint": fp, "verdict": verdict}
-    _save_session(session_id, data)
+    _mutate_session(session_id, lambda d: d["verdicts"].__setitem__(repo, {"fingerprint": fp, "verdict": verdict}))
+
+
+def prune_sessions(days=14):
+    cutoff = time.time() - days * 86400
+    for path in (home() / "state" / "sessions").glob("*"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass
+
+
+def update_repo(session_id, repo, **fields):
+    def apply(d):
+        entry = d["repos"].get(repo)
+        if isinstance(entry, dict):
+            entry.update(fields)
+    _mutate_session(session_id, apply)

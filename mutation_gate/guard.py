@@ -2,15 +2,20 @@
 
 import os
 import re
+import stat
 from pathlib import Path
 
-from . import diff, store
+from . import diff, gate, store
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 NAME = "mutation-gate"
 SETTINGS_NAME = re.compile(r"^settings(\.local)?\.json$")
-# Settings keys that switch off every hook, the gate's included.
-HOOK_KILLERS = re.compile(r"disableAllHooks|allowManagedHooksOnly")
+# Settings keys that switch off every hook, the gate's included, or point the gate elsewhere.
+HOOK_KILLERS = re.compile(r"disableAllHooks|allowManagedHooksOnly|MUTATION_GATE_HOME|CLAUDE_PLUGIN_ROOT|CLAUDE_PLUGIN_DATA")
+# tool_input keys that hold file paths in MCP tools.
+PATH_KEYS = ("file_path", "path", "paths", "notebook_path", "target", "destination", "source", "directory", "cwd")
+# Existing files read to compare old and new text; anything bigger or not a regular file is skipped.
+MAX_READ_BYTES = 2_000_000
 
 BASH_SETTINGS = re.compile(r"(?<![\w.-])settings(\.local)?\.json")
 BASH_CONFIG = re.compile(r"pyproject\.toml|setup\.cfg|mutmut\.toml")
@@ -22,12 +27,13 @@ BASH_WRITES = re.compile(
 )
 # Ways a shell command can point at the gate's own files.
 BASH_GATE_PATHS = re.compile(r"CLAUDE_PLUGIN_ROOT|CLAUDE_PLUGIN_DATA|MUTATION_GATE_HOME|mutation[-_]gate")
-BASH_CLI = re.compile(r"bin/mutation-gate|(?:^|[\s;&|(])mutation-gate\s+(allow|disallow|on|off|threshold|hook)\b")
+# CLI subcommands that change the gate. test, status and last only measure or read, so Claude may run them.
+BASH_CLI = re.compile(r"mutation-gate[\"']?\s+(allow|disallow|on|off|threshold|hook)\b")
 BASH_PLUGIN_CMD = re.compile(r"\bclaude\s+plugins?\s+(disable|uninstall|remove|marketplace\s+remove)\b")
 # Directories a Bash command works in besides its cwd: `cd dir && …`, `git -C dir …`, absolute paths.
 BASH_DIRS = re.compile(r"(?:^|&&|;|\|\||\()\s*cd\s+([^\s;&|)]+)|\bgit\s+-C\s+([^\s;&|)]+)")
 BASH_PATHS = re.compile(r"(?<![\w$=])(~?/[^\s'\";|&<>()`]+)")
-MAX_BASH_PATHS = 20
+MAX_BASH_DIRS = 20
 
 
 def _deny(reason):
@@ -59,9 +65,13 @@ def _existing_dir(path):
 
 
 def _remember(session_id, start):
-    root = diff.repo_root(_existing_dir(_resolve(start)))
-    if root:
-        store.remember_repo(session_id, root, diff.head_sha(root))
+    """Snapshot the repo containing `start` if it is enabled. Never raises: deny checks matter more."""
+    try:
+        root = diff.repo_root(_existing_dir(_resolve(start)))
+        if root:
+            gate.track(session_id, root)
+    except Exception:
+        pass
 
 
 def _repo_relative(p):
@@ -79,12 +89,18 @@ def _pairs(tool, tool_input, path):
     if tool == "MultiEdit":
         return [(e.get("old_string", ""), e.get("new_string", "")) for e in tool_input.get("edits", [])]
     if tool == "Write":
-        try:
-            old = _resolve(path).read_text()
-        except (OSError, UnicodeDecodeError):
-            old = ""
-        return [(old, tool_input.get("content", ""))]
+        return [(_read_small(path), tool_input.get("content", ""))]
     return [("", tool_input.get("new_source", ""))]
+
+
+def _read_small(path):
+    try:
+        st = os.stat(_resolve(path))
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_READ_BYTES:
+            return ""
+        return _resolve(path).read_text()
+    except (OSError, UnicodeDecodeError):
+        return ""
 
 
 def _adds(rx, old, new):
@@ -96,12 +112,12 @@ def _check_edit(tool, tool_input):
     if not path:
         return None
     if _protected(path):
-        return _deny("게이트 자신의 파일·설정·예외 목록은 수정할 수 없음. 바꿔야 하면 Max에게 요청하라.")
+        return _deny("게이트 자신의 파일·설정·예외 목록은 수정할 수 없음. 바꿔야 하면 사용자에게 요청하라.")
     pairs = _pairs(tool, tool_input, path)
     p = _resolve(path)
     if SETTINGS_NAME.match(p.name) and ".claude" in p.parts:
         if any(NAME in old or NAME in new or _adds(HOOK_KILLERS, old, new) for old, new in pairs):
-            return _deny("settings에서 mutation-gate 플러그인이나 hook 전체를 끄는 설정은 바꿀 수 없음. Max만 바꿀 수 있다.")
+            return _deny("settings에서 mutation-gate 플러그인이나 hook 전체를 끄는 설정은 바꿀 수 없음. 사용자만 바꿀 수 있다.")
     rel = _repo_relative(p)
     for old, new in pairs:
         if diff.classify(rel) and any(_adds(rx, old, new) for rx in diff.INLINE_SUPPRESSIONS):
@@ -111,14 +127,14 @@ def _check_edit(tool, tool_input):
     return None
 
 
-def _check_bash(command):
+def _check_bash(command, dirs):
     if BASH_CLI.search(command):
-        return _deny("mutation-gate CLI(allow·off·threshold 등)는 Max만 실행한다. status·last는 허용.")
+        return _deny("mutation-gate CLI의 allow·disallow·on·off·threshold는 사용자만 실행한다. test·status·last는 허용.")
     if BASH_PLUGIN_CMD.search(command):
-        return _deny("플러그인 비활성화·삭제는 Max만 한다.")
+        return _deny("플러그인 비활성화·삭제는 사용자만 한다.")
     writes = BASH_WRITES.search(HARMLESS_REDIRECTS.sub("", command))
-    if writes and BASH_GATE_PATHS.search(command):
-        return _deny("게이트 자신의 파일·설정·예외 목록은 Bash로 수정할 수 없음. 바꿔야 하면 Max에게 요청하라.")
+    if writes and (BASH_GATE_PATHS.search(command) or any(_protected(d) for d in dirs)):
+        return _deny("게이트 자신의 파일·설정·예외 목록은 Bash로 수정할 수 없음. 바꿔야 하면 사용자에게 요청하라.")
     if writes and any(rx.search(command) for rx in diff.INLINE_SUPPRESSIONS):
         return _deny("mutant 억제 주석(Stryker disable, pragma: no mutate)은 금지. 테스트를 보강하라.")
     if writes and BASH_SETTINGS.search(command):
@@ -128,24 +144,51 @@ def _check_bash(command):
     return None
 
 
+def _bash_dirs(cwd, command):
+    """Directories a Bash command works in: its cwd, `cd`/`git -C` targets and absolute paths."""
+    dirs = [a or b for a, b in BASH_DIRS.findall(command)]
+    found = []
+    for target in [cwd] + [d.strip("'\"") for d in dirs] + BASH_PATHS.findall(command):
+        parent = _existing_dir(_resolve(os.path.join(cwd, os.path.expanduser(target))))
+        if parent not in found:
+            found.append(parent)
+        if len(found) >= MAX_BASH_DIRS:
+            break
+    return found
+
+
+def _tool_paths(tool_input):
+    paths = []
+    for key in PATH_KEYS:
+        value = tool_input.get(key)
+        values = value if isinstance(value, list) else [value]
+        paths += [v for v in values if isinstance(v, str) and v]
+    return paths
+
+
 def on_pre_tool(payload):
-    sid = payload.get("session_id", "unknown")
-    tool = payload.get("tool_name", "")
-    tool_input = payload.get("tool_input") or {}
+    sid = payload.get("session_id") or "unknown"
+    tool = payload.get("tool_name") or ""
+    tool_input = payload.get("tool_input")
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
     if tool in EDIT_TOOLS:
+        verdict = _check_edit(tool, tool_input)
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
-        if path:
+        if verdict is None and isinstance(path, str) and path:
             _remember(sid, path)
-        return _check_edit(tool, tool_input)
+        return verdict
     if tool == "Bash":
-        command = tool_input.get("command", "")
-        cwd = payload.get("cwd") or "."
-        dirs = [a or b for a, b in BASH_DIRS.findall(command)]
-        seen = set()
-        for target in [cwd] + [d.strip("'\"") for d in dirs] + BASH_PATHS.findall(command)[:MAX_BASH_PATHS]:
-            parent = _existing_dir(_resolve(os.path.join(cwd, os.path.expanduser(target))))
-            if parent not in seen:
-                seen.add(parent)
-                _remember(sid, parent)
-        return _check_bash(command)
+        command = str(tool_input.get("command") or "")
+        dirs = _bash_dirs(payload.get("cwd") or ".", command)
+        verdict = _check_bash(command, dirs)
+        if verdict is None:
+            for d in dirs:
+                _remember(sid, d)
+        return verdict
+    if tool.startswith("mcp__"):
+        paths = _tool_paths(tool_input)
+        if any(_protected(p) for p in paths):
+            return _deny("게이트 자신의 파일·설정·예외 목록은 수정할 수 없음. 바꿔야 하면 사용자에게 요청하라.")
+        for p in paths:
+            _remember(sid, p)
     return None

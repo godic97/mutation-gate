@@ -1,20 +1,34 @@
-"""Changed-line extraction and suppression scanning."""
+"""Snapshots of a repo's code files, the lines changed between two snapshots, and tamper scans.
 
+A snapshot is a git tree built from a private copy of the index plus the working tree's code
+files (tracked or untracked, .gitignore respected). The real index and refs are never touched.
+Diffing two snapshots counts exactly what changed during the session: work that existed before
+it is in the base, and commits made during it do not hide anything.
+"""
+
+import configparser
 import hashlib
+import os
 import re
+import shutil
 import subprocess
+import tempfile
+import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+GIT_TIMEOUT = 60
 
 # Directories written by mutation tools or package managers; never part of the gate's input.
-IGNORED_DIRS = {"mutants", ".stryker-tmp", "node_modules", ".venv", "venv", "dist", "build", "__pycache__"}
+IGNORED_ANYWHERE = {"node_modules", ".venv", "venv", "__pycache__", ".stryker-tmp"}
+IGNORED_AT_ROOT = {"mutants"}
 
-JS_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"}
+JS_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".vue", ".svelte"}
 TEST_DIRS = {"__tests__", "tests", "test"}
-
-# Untracked files above this size are data, not source; reading them every turn is waste.
-MAX_UNTRACKED_BYTES = 1_000_000
+# JS/TS that supports tests or tooling rather than shipping: never mutated.
+JS_SUPPORT_TOP = {"test", "tests", "e2e", "cypress", "playwright"}
+JS_SUPPORT_NAME = re.compile(r"\.(stories|story|test-utils|fixture|fixtures)\.|^setupTests\.|^\.eslintrc\.|\.d\.[mc]?ts$")
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -24,20 +38,33 @@ INLINE_SUPPRESSIONS = [
     re.compile(r"pragma:\s*no\s+mutate", re.IGNORECASE),
 ]
 CONFIG_FILES = {"pyproject.toml", "setup.cfg", "mutmut.toml"}
+# mutmut 3 settings that change which mutants exist or how they are judged.
 CONFIG_SUPPRESSIONS = re.compile(
-    r"\b(do_not_mutate|do_not_mutate_patterns|only_mutate|mutate_only_covered_lines|source_paths)\b"
+    r"\b(do_not_mutate|do_not_mutate_patterns|only_mutate|mutate_only_covered_lines|source_paths"
+    r"|paths_to_mutate|tests_dir|pytest_add_cli_args|pytest_add_cli_args_test_selection"
+    r"|type_check_command|timeout_multiplier|timeout_constant|max_stack_depth)\b"
+)
+# Markers that switch tests off or narrow a run to a few tests.
+TEST_SKIPS = re.compile(
+    r"\b(it|test|describe|suite|context)\.(skip|only|todo|skipIf|runIf)\b"
+    r"|\b(xit|xtest|xdescribe|fit|fdescribe)\s*\("
+    r"|@pytest\.mark\.(skip|skipif|xfail)\b|\bpytest\.(skip|xfail)\s*\(|\bunittest\.skip"
 )
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check=True, env=None, stdin=None):
     return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True,
-        encoding="utf-8", errors="replace", check=check,
+        ["git", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "-C", str(repo), *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=check, env=env, input=stdin, timeout=GIT_TIMEOUT,
     )
 
 
 def repo_root(path):
-    result = _git(path, "rev-parse", "--show-toplevel", check=False)
+    try:
+        result = _git(path, "rev-parse", "--show-toplevel", check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     if result.returncode != 0:
         return None
     return str(Path(result.stdout.strip()).resolve())
@@ -48,35 +75,80 @@ def head_sha(repo):
     return result.stdout.strip() if result.returncode == 0 else EMPTY_TREE
 
 
+def stash_ref(repo):
+    return _git(repo, "rev-parse", "-q", "--verify", "refs/stash", check=False).stdout.strip()
+
+
 def _ignored(rel):
-    return any(part in IGNORED_DIRS for part in Path(rel).parts[:-1])
+    parts = Path(rel).parts
+    return bool(parts) and (parts[0] in IGNORED_AT_ROOT or any(p in IGNORED_ANYWHERE for p in parts[:-1]))
 
 
-def _diff_text(repo, base):
-    return _git(
-        repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "--unified=0", base, "--"
-    ).stdout
+def is_code_path(rel):
+    p = Path(rel)
+    return not _ignored(rel) and (p.suffix in JS_EXTS or p.suffix == ".py" or p.name in CONFIG_FILES)
 
 
-def _untracked(repo):
-    out = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
-    return sorted(p for p in out.split("\0") if p and not _ignored(p))
+def is_test(rel):
+    p = Path(rel)
+    name, dirs = p.name, p.parts[:-1]
+    if p.suffix in JS_EXTS:
+        return ".test." in name or ".spec." in name or "__tests__" in dirs
+    if p.suffix == ".py" and name != "conftest.py":
+        return name.startswith("test_") or name.endswith("_test.py") or any(d in TEST_DIRS for d in dirs)
+    return False
+
+
+def classify(rel):
+    """Return the adapter language for a mutable source file, or None."""
+    p = Path(rel)
+    if _ignored(rel) or is_test(rel) or p.name == "conftest.py":
+        return None
+    if p.suffix in JS_EXTS:
+        support = p.parts[0] in JS_SUPPORT_TOP or "__mocks__" in p.parts or JS_SUPPORT_NAME.search(p.name)
+        return None if support or ".config." in p.name else "js"
+    if p.suffix == ".py":
+        return None if any(d in TEST_DIRS for d in p.parts[:-1]) else "py"
+    return None
+
+
+def snapshot(repo):
+    """Tree id of the repo's code files as they are on disk right now."""
+    gitdir = Path(_git(repo, "rev-parse", "--absolute-git-dir").stdout.strip())
+    with tempfile.TemporaryDirectory(prefix="mutation-gate-") as tmp:
+        index = Path(tmp) / "index"
+        env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+        if (gitdir / "index").exists():
+            # copy2 keeps the index mtime, which git needs to spot same-size edits made in the
+            # same second as the last index write (racy-git); a fresh mtime hides them.
+            shutil.copy2(gitdir / "index", index)
+        elif head_sha(repo) != EMPTY_TREE:
+            _git(repo, "read-tree", "HEAD", env=env)
+        out = _git(repo, "ls-files", "-z", "--modified", "--deleted", "--others", "--exclude-standard", env=env).stdout
+        paths = sorted({p for p in out.split("\0") if p and is_code_path(p)})
+        if paths:
+            _git(repo, "update-index", "--add", "--remove", "-z", "--stdin", env=env, stdin="\0".join(paths) + "\0")
+        return _git(repo, "write-tree", env=env).stdout.strip()
+
+
+@dataclass
+class Changes:
+    added: dict = field(default_factory=dict)  # repo-relative path -> {line number: text}
+    deleted_tests: list = field(default_factory=list)
 
 
 def _lines(text):
-    """Split like a diff does: on newlines only (str.splitlines also splits on \f, \v, \u2028...)."""
+    """Split on newlines only (str.splitlines also splits on \\f, \\v, \\u2028...)."""
     lines = text.split("\n")
     return lines[:-1] if lines and lines[-1] == "" else lines
 
 
-def _changed_files(repo, base):
-    # -z gives raw names: no C-quoting of non-ASCII, no tab suffix for names with spaces.
-    out = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", base, "--").stdout
-    return [p for p in out.split("\0") if p and not _ignored(p)]
-
-
 def _hunk_lines(patch):
-    """{new line number: text} for added lines, walking hunks by their line counts."""
+    """{new line number: text} for added lines, walking hunks by their line counts.
+
+    A hunk that only deletes marks the two new-side lines around the deletion (text ""), so
+    removing a check still puts the surrounding code under test.
+    """
     added = {}
     old_left = new_left = 0
     lineno = 0
@@ -87,6 +159,10 @@ def _hunk_lines(patch):
                 old_left = int(match.group(1) or 1)
                 lineno = int(match.group(2))
                 new_left = int(match.group(3) or 1)
+                if new_left == 0:
+                    for n in (lineno, lineno + 1):
+                        if n >= 1:
+                            added.setdefault(n, "")
             continue
         if line.startswith("\\"):
             continue
@@ -99,63 +175,28 @@ def _hunk_lines(patch):
     return added
 
 
-def added_lines(repo, base):
-    """Map each changed file (repo-relative) to {new line number: text} since `base`."""
-    added = {}
-    for rel in _changed_files(repo, base):
-        patch = _git(repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "--unified=0", base, "--", f":(literal){rel}").stdout
+def changes(repo, base, current):
+    result = Changes()
+    if base == current:
+        return result
+    out = _git(repo, "diff-tree", "-r", "-z", "--name-status", "--no-renames", base, current).stdout
+    tokens = [t for t in out.split("\0") if t]
+    for status, rel in zip(tokens[::2], tokens[1::2]):
+        if not is_code_path(rel):
+            continue
+        if status == "D":
+            if is_test(rel):
+                result.deleted_tests.append(rel)
+            continue
+        patch = _git(
+            repo, "diff-tree", "-p", "-U0", "--no-color", "--no-textconv", "--no-ext-diff", "--no-renames",
+            base, current, "--", f":(literal){rel}",
+        ).stdout
         lines = _hunk_lines(patch)
         if lines:
-            added[rel] = lines
-    for rel in _untracked(repo):
-        try:
-            if (Path(repo) / rel).stat().st_size > MAX_UNTRACKED_BYTES:
-                continue
-            text = (Path(repo) / rel).read_text()
-        except (UnicodeDecodeError, OSError):
-            continue
-        lines = _lines(text)
-        if lines:
-            added[rel] = {i: t for i, t in enumerate(lines, start=1)}
-    return added
-
-
-def fingerprint(repo, base):
-    digest = hashlib.sha256(_diff_text(repo, base).encode())
-    for rel in _untracked(repo):
-        digest.update(rel.encode() + b"\0")
-        try:
-            path = Path(repo) / rel
-            st = path.stat()
-            if st.st_size > MAX_UNTRACKED_BYTES:
-                digest.update(f"{st.st_size}:{st.st_mtime_ns}".encode())
-            else:
-                digest.update(path.read_bytes())
-        except OSError:
-            pass
-    return digest.hexdigest()
-
-
-def classify(rel):
-    """Return the adapter language for a mutable source file, or None."""
-    p = Path(rel)
-    parts = p.parts
-    if any(part in IGNORED_DIRS for part in parts[:-1]):
-        return None
-    name = p.name
-    if p.suffix in JS_EXTS:
-        if name.endswith(".d.ts") or ".test." in name or ".spec." in name or ".config." in name:
-            return None
-        if any(part in TEST_DIRS for part in parts[:-1]):
-            return None
-        return "js"
-    if p.suffix == ".py":
-        if name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py":
-            return None
-        if any(part in TEST_DIRS for part in parts[:-1]):
-            return None
-        return "py"
-    return None
+            result.added[rel] = lines
+    result.deleted_tests.sort()
+    return result
 
 
 def find_suppressions(added):
@@ -173,3 +214,38 @@ def find_suppressions(added):
             if any(rx.search(text) for rx in rx_list):
                 found.append((rel, lineno, text))
     return found
+
+
+def find_test_skips(added):
+    return [
+        (rel, n, added[rel][n])
+        for rel in sorted(added) if is_test(rel)
+        for n in sorted(added[rel]) if TEST_SKIPS.search(added[rel][n])
+    ]
+
+
+def _mutation_section(name, text):
+    if text is None:
+        return None
+    try:
+        if name == "setup.cfg":
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read_string(text)
+            return dict(parser["mutmut"]) if parser.has_section("mutmut") else None
+        data = tomllib.loads(text)
+        return data.get("tool", {}).get("mutmut") if name == "pyproject.toml" else data
+    except (ValueError, configparser.Error):
+        return "unparseable:" + hashlib.sha1(text.encode()).hexdigest()
+
+
+def mutation_config_changes(repo, base):
+    """Root config files whose mutmut section differs from the base snapshot."""
+    changed = []
+    for name in sorted(CONFIG_FILES):
+        old = _git(repo, "show", f"{base}:{name}", check=False)
+        before = _mutation_section(name, old.stdout if old.returncode == 0 else None)
+        path = Path(repo) / name
+        after = _mutation_section(name, path.read_text(errors="replace") if path.is_file() else None)
+        if before != after:
+            changed.append(name)
+    return changed

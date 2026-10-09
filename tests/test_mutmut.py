@@ -163,11 +163,85 @@ def test_mangled_names_cover_functions_and_methods():
     assert names == ["x_is_adult", "x_label", "xǁBoxǁdouble"]
 
 
-def test_module_name_strips_src_prefix():
+def test_module_name_strips_src_prefix_and_init():
     assert mutmut.module_name("src/pkg/age.py") == "pkg.age"
     assert mutmut.module_name("pkg/age.py") == "pkg.age"
+    assert mutmut.module_name("src/pkg/__init__.py") == "pkg"
 
 
 def test_parse_show_keeps_removed_lines_that_start_with_dashes():
     text = "# m: survived\n--- src/a.py\n+++ src/a.py\n@@ -1,3 +1,3 @@\n def f(x):\n---x\n+--x + 1\n"
-    assert mutmut._parse_show(text) == (2, "--x", "--x + 1")
+    assert mutmut._parse_show(text) == (2, "--x", "--x + 1", 1)
+
+
+def test_functions_in_init_are_mutated(py):
+    py.write("src/pkg/__init__.py", "def is_adult(age):\n    return age >= 18\n")
+    py.write("tests/test_init.py", "from pkg import is_adult\n\n\ndef test_runs():\n    is_adult(30)\n")
+
+    result = mutmut.run(str(py.path), {"src/pkg/__init__.py": {2}}, budget=120)
+
+    assert result.mutants and all(m.status == "undetected" for m in result.mutants)
+
+
+def test_comment_above_def_keeps_line_mapping(py):
+    src = "def other():\n    return 1\n\n\n# Legal adulthood threshold.\ndef is_adult(age):\n    return age >= 18\n"
+    py.write("src/pkg/age.py", src)
+    py.write("tests/test_age.py", WEAK_TEST)
+
+    result = mutmut.run(str(py.path), {"src/pkg/age.py": {7}}, budget=120)
+
+    assert result.mutants and {m.line for m in result.mutants} == {7}
+
+
+def test_decorated_functions_are_reported_unverified(py):
+    py.write("src/pkg/age.py", "import functools\n\n\n@functools.cache\ndef is_adult(age):\n    return age >= 18\n")
+    py.write("tests/test_age.py", WEAK_TEST)
+
+    result = mutmut.run(str(py.path), {"src/pkg/age.py": {6}}, budget=120)
+
+    assert result.mutants == []
+    assert any("is_adult" in u for u in result.unverified)
+
+
+def test_no_test_covers_any_mutant_is_a_failure(py):
+    py.write("tests/test_other.py", "def test_nothing():\n    assert True\n")
+
+    result = mutmut.run(str(py.path), {"src/pkg/age.py": {2}}, budget=120)
+
+    assert result.failure and "테스트" in result.failure
+
+
+def test_tests_that_only_fail_inside_mutmut_sandbox_are_an_error(py):
+    py.write("data/limit.txt", "18\n")
+    py.write("tests/test_age.py", STRONG_TEST + "\n\ndef test_data():\n    assert open('data/limit.txt').read().strip() == '18'\n")
+
+    result = mutmut.run(str(py.path), {"src/pkg/age.py": {2}}, budget=120)
+
+    assert result.failure is None
+    assert result.error and "sandbox" in result.error
+
+
+def test_tracked_mutmut_binary_is_refused(repo, gate_home):
+    from conftest import git
+    repo.write("src/pkg/age.py", AGE)
+    repo.write(".venv/bin/mutmut", "#!/bin/sh\ntouch PWNED\n")
+    (repo.path / ".venv/bin/mutmut").chmod(0o755)
+    git(repo.path, "add", "-f", ".venv/bin/mutmut")
+
+    result = mutmut.run(str(repo.path), {"src/pkg/age.py": {2}}, budget=30)
+
+    assert result.error and result.error_kind == "missing"
+    assert not (repo.path / "PWNED").exists()
+
+
+def test_committed_marker_does_not_get_mutants_dir_deleted(py):
+    from conftest import git
+    py.write("tests/test_age.py", WEAK_TEST)
+    py.write("mutants/.mutation-gate", "created by mutation-gate\n")
+    py.write("mutants/notes.md", "keep me\n")
+    git(py.path, "add", "-f", "mutants")
+
+    result = mutmut.run(str(py.path), {"src/pkg/age.py": {2}}, budget=120)
+
+    assert result.error and "mutants/" in result.error
+    assert (py.path / "mutants" / "notes.md").read_text() == "keep me\n"
