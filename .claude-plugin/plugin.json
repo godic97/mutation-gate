@@ -1,10 +1,16 @@
 {
   "name": "mutation-gate",
   "version": "0.1.0",
-  "description": "Blocks Claude from ending a turn until its tests kill the mutants of the code it changed (Stryker for JS/TS + vitest, mutmut for Python + pytest).",
+  "description": "Claude Code plugin that won't take Claude's word for its tests: a Stop hook runs mutation testing (Stryker for JS/TS, mutmut for Python) on the lines Claude changed and blocks the turn until the tests kill the mutants.",
   "author": {
     "name": "godic97"
   },
   "repository": "https://github.com/godic97/mutation-gate",
-  "keywords": ["testing", "mutation-testing", "stryker", "mutmut", "quality-gate"]
+  "keywords": [
+    "testing",
+    "mutation-testing",
+    "stryker",
+    "mutmut",
+    "quality-gate"
+  ]
 }

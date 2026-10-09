@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "mutation-gate",
-      "description": "Blocks the end of a turn until tests kill the mutants of the changed lines.",
+      "description": "Claude Code plugin that won't take Claude's word for its tests: a Stop hook runs mutation testing (Stryker for JS/TS, mutmut for Python) on the lines Claude changed and blocks the turn until the tests kill the mutants.",
       "source": "./",
       "category": "testing"
     }
