@@ -15,6 +15,7 @@ TEST_COMMAND = re.compile(
     r"(^|[\s;&|(/])(pytest|py\.test|vitest|jest)\b"
     r"|\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b"
     r"|\bpython[\d.]*\s+-m\s+pytest\b"
+    r"|\b(cargo|go|dotnet|sbt)\s+test\b|\b(mvn|mvnw|gradle|gradlew)\s+(\S+\s+)*test\b|\bgradlew\s+test\b"
 )
 MUTATION_TEST = re.compile(r"\bmutation-gate[\"']?\s+test\b")
 REMINDER = (

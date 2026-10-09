@@ -29,6 +29,11 @@ TEST_DIRS = {"__tests__", "tests", "test"}
 # JS/TS that supports tests or tooling rather than shipping: never mutated.
 JS_SUPPORT_TOP = {"test", "tests", "e2e", "cypress", "playwright"}
 JS_SUPPORT_NAME = re.compile(r"\.(stories|story|test-utils|fixture|fixtures)\.|^setupTests\.|^\.eslintrc\.|\.d\.[mc]?ts$")
+# Compiled languages: extension -> adapter language.
+OTHER_LANGS = {".rs": "rust", ".go": "go", ".java": "jvm", ".kt": "jvm", ".cs": "dotnet", ".scala": "scala"}
+RUST_NON_SOURCE = {"tests", "benches", "examples"}
+# Maven/Gradle/sbt layout: src/<set>/<lang>/... where any set but `main` holds tests.
+JVM_TEST_SETS = {"test", "it", "integrationTest", "testFixtures"}
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -37,6 +42,7 @@ HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 INLINE_SUPPRESSIONS = [
     re.compile(r"(//|/\*)\s*stryker\s+disable", re.IGNORECASE),
     re.compile(r"#\s*pragma:\s*no\s+mutate", re.IGNORECASE),
+    re.compile(r"#\[(mutants::skip|cfg_attr\(test,\s*mutants::skip\))\]"),
 ]
 CONFIG_FILES = {"pyproject.toml", "setup.cfg", "mutmut.toml"}
 # mutmut 3 settings that change which mutants exist or how they are judged.
@@ -50,6 +56,7 @@ TEST_SKIPS = re.compile(
     r"\b(it|test|describe|suite|context)\.(skip|only|todo|skipIf|runIf)\b"
     r"|\b(xit|xtest|xdescribe|fit|fdescribe)\s*\("
     r"|@pytest\.mark\.(skip|skipif|xfail)\b|\bpytest\.(skip|xfail)\s*\(|\bunittest\.skip"
+    r"|#\[ignore\b|\bt\.Skip(Now|f)?\(|@Disabled\b|@Ignore\b|\bSkip\s*=|\bignore\(\s*\""
 )
 
 
@@ -87,7 +94,13 @@ def _ignored(rel):
 
 def is_code_path(rel):
     p = Path(rel)
-    return not _ignored(rel) and (p.suffix in JS_EXTS or p.suffix == ".py" or p.name in CONFIG_FILES)
+    return not _ignored(rel) and (
+        p.suffix in JS_EXTS or p.suffix == ".py" or p.suffix in OTHER_LANGS or p.name in CONFIG_FILES
+    )
+
+
+def _jvm_test(parts):
+    return any(a == "src" and b in JVM_TEST_SETS for a, b in zip(parts, parts[1:]))
 
 
 def is_test(rel):
@@ -97,6 +110,15 @@ def is_test(rel):
         return ".test." in name or ".spec." in name or "__tests__" in dirs
     if p.suffix == ".py" and name != "conftest.py":
         return name.startswith("test_") or name.endswith("_test.py") or any(d in TEST_DIRS for d in dirs)
+    if p.suffix == ".rs":
+        return any(d in RUST_NON_SOURCE for d in dirs)
+    if p.suffix == ".go":
+        return name.endswith("_test.go")
+    if p.suffix in (".java", ".kt", ".scala"):
+        return _jvm_test(dirs) or any(d in TEST_DIRS for d in dirs)
+    if p.suffix == ".cs":
+        return (p.stem.endswith(("Tests", "Test"))
+                or any(d.endswith((".Tests", ".Test", ".UnitTests")) or d in TEST_DIRS for d in dirs))
     return False
 
 
@@ -110,7 +132,7 @@ def classify(rel):
         return None if support or ".config." in p.name else "js"
     if p.suffix == ".py":
         return None if any(d in TEST_DIRS for d in p.parts[:-1]) else "py"
-    return None
+    return OTHER_LANGS.get(p.suffix)
 
 
 def snapshot(repo):

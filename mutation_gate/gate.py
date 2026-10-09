@@ -32,6 +32,9 @@ def _run_adapters(repo, by_lang, budget, adapters, full_budget):
     out = {"mutants": [], "failures": [], "errors": [], "warnings": [], "ignored": 0, "cacheable": True}
     deadline = time.monotonic() + budget
     for lang in sorted(by_lang):
+        if lang not in adapters:
+            out["warnings"].append(f"no mutation adapter for {lang} yet: {', '.join(sorted(by_lang[lang]))}")
+            continue
         remaining = max(1, int(deadline - time.monotonic()))
         result = adapters[lang].run(repo, by_lang[lang], remaining)
         out["mutants"] += result.mutants

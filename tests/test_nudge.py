@@ -52,3 +52,8 @@ def test_running_mutation_gate_test_ends_the_reminders(gate_home):
 def test_sessions_are_independent(gate_home):
     assert post("Bash", command="pytest", sid="a") is not None
     assert post("Bash", command="pytest", sid="b") is not None
+
+
+@pytest.mark.parametrize("command", ["cargo test", "go test ./...", "mvn test", "./gradlew test", "dotnet test", "sbt test"])
+def test_running_tests_in_other_languages_reminds_claude(gate_home, command):
+    assert "mutation-gate test" in context(post("Bash", command=command))

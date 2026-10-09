@@ -315,3 +315,13 @@ def test_stop_lists_only_the_first_survivors(stop_env, monkeypatch):
     out, _ = stop(AdapterResult(mutants=mutants), monkeypatch)
     assert out["systemMessage"].count("src/a.ts:2") == gate.BANNER_SURVIVORS
     assert "mutation-gate last" in out["systemMessage"]
+
+
+def test_language_without_an_adapter_is_reported_not_crashed(repo):
+    repo.write("src/lib.rs", "fn a() {}\n")
+    repo.commit()
+    base = diff.snapshot(repo.path)
+    repo.write("src/lib.rs", "fn a() { let x = 1; }\n")
+    fake = FakeAdapter(AdapterResult())
+    verdict = gate.evaluate(str(repo.path), base, diff.snapshot(repo.path), 80, set(), 60, {"js": fake, "py": fake})
+    assert any("rust" in w for w in verdict["warnings"])

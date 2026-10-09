@@ -1,3 +1,4 @@
+import pytest
 from conftest import git
 
 from mutation_gate import diff
@@ -261,3 +262,35 @@ def test_marker_words_inside_strings_are_not_suppressions():
         "src/msg.ts": {3: 'const help = "never add Stryker disable comments";'},
     }
     assert diff.find_suppressions(added) == []
+
+
+@pytest.mark.parametrize("path, lang", [
+    ("src/lib.rs", "rust"), ("crates/core/src/parse.rs", "rust"),
+    ("pkg/price/price.go", "go"), ("main.go", "go"),
+    ("src/main/java/com/x/Price.java", "jvm"), ("src/main/kotlin/x/Price.kt", "jvm"),
+    ("src/Shop/Price.cs", "dotnet"),
+    ("src/main/scala/x/Price.scala", "scala"),
+])
+def test_classify_other_languages(path, lang):
+    assert diff.classify(path) == lang
+
+
+@pytest.mark.parametrize("path", [
+    "tests/integration.rs", "benches/b.rs", "examples/demo.rs",
+    "pkg/price/price_test.go",
+    "src/test/java/com/x/PriceTest.java", "src/test/kotlin/x/PriceTest.kt",
+    "tests/Shop.Tests/PriceTests.cs", "src/Shop.Tests/PriceTest.cs",
+    "src/test/scala/x/PriceSpec.scala",
+])
+def test_other_languages_tests_are_not_source(path):
+    assert diff.classify(path) is None
+    assert diff.is_test(path)
+
+
+@pytest.mark.parametrize("line", [
+    "    #[ignore]", "\tt.Skip(\"later\")", "    @Disabled", "    @Ignore", "    [Fact(Skip = \"x\")]", '  ignore("x") {',
+])
+def test_find_test_skips_in_other_languages(line):
+    added = {"src/test/x/ATest.java": {1: line}, "a_test.go": {1: line}, "tests/a.rs": {1: line},
+             "tests/A.Tests/ATests.cs": {1: line}, "src/test/scala/ASpec.scala": {1: line}}
+    assert diff.find_test_skips(added)
