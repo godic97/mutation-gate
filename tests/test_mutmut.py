@@ -128,7 +128,7 @@ def test_failing_tests_are_a_failure(py):
     result = mutmut.run(str(py.path), {"src/pkg/age.py": {2}}, budget=120)
 
     assert result.error is None
-    assert "실패" in result.failure
+    assert "failing" in result.failure
 
 
 def test_work_dir_is_removed_after_run(py):
@@ -208,7 +208,7 @@ def test_no_test_covers_any_mutant_is_a_failure(py):
 
     result = mutmut.run(str(py.path), {"src/pkg/age.py": {2}}, budget=120)
 
-    assert result.failure and "테스트" in result.failure
+    assert result.failure and "no test" in result.failure
 
 
 def test_tests_that_only_fail_inside_mutmut_sandbox_are_an_error(py):

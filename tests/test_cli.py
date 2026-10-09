@@ -45,7 +45,7 @@ def test_status_shows_settings(repo, gate_home):
     cli("on", cwd=repo.path)
     cli("allow", "abcd1234", "reason", cwd=repo.path)
     out = cli("status", cwd=repo.path).stdout
-    assert "threshold 80%" in out and "abcd1234" in out and "켜짐" in out
+    assert "threshold 80%" in out and "abcd1234" in out and ": on" in out
 
 
 
@@ -58,7 +58,7 @@ def test_pre_tool_hook_prints_nothing_when_allowed(repo, gate_home):
 def test_hook_crash_is_reported_to_user_not_swallowed(repo, gate_home):
     out = cli("hook", "stop", cwd=repo.path, stdin="{not json")
     assert out.returncode == 0
-    assert "mutation-gate 내부 오류" in json.loads(out.stdout)["systemMessage"]
+    assert "mutation-gate internal error" in json.loads(out.stdout)["systemMessage"]
 
 
 def test_stop_hook_end_to_end_reports_weak_python_test(repo, gate_home):
@@ -88,7 +88,7 @@ def test_stop_hook_end_to_end_reports_weak_python_test(repo, gate_home):
 
 def test_on_reports_whether_the_mutation_tool_is_installed(repo, gate_home):
     out = cli("on", cwd=repo.path).stdout
-    assert "켜짐" in out and "설치" in out
+    assert ": on" in out and "installed" in out
 
 
 def test_killed_stop_hook_takes_the_tool_processes_with_it(repo, gate_home, tmp_path):
@@ -175,7 +175,7 @@ def test_test_command_with_nothing_to_test_says_so(repo, gate_home):
 
     out = cli("test", cwd=repo.path)
 
-    assert out.returncode == 2 and "검사할 소스" in out.stdout
+    assert out.returncode == 2 and "No source files" in out.stdout
 
 
 def test_test_command_result_shows_in_last(repo, gate_home):

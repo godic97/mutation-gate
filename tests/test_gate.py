@@ -75,16 +75,16 @@ def test_allowed_mutants_leave_the_denominator(ts_change):
 
 def test_adapter_failure_fails_the_gate(ts_change):
     repo, base = ts_change
-    verdict, _ = evaluate(repo, base, AdapterResult(failure="테스트가 현재 실패함"))
+    verdict, _ = evaluate(repo, base, AdapterResult(failure="tests are failing"))
     assert verdict["status"] == "fail"
-    assert verdict["failures"] == ["테스트가 현재 실패함"]
+    assert verdict["failures"] == ["tests are failing"]
 
 
 def test_adapter_error_is_reported_not_failed(ts_change):
     repo, base = ts_change
-    verdict, _ = evaluate(repo, base, AdapterResult(error="Stryker가 설치되어 있지 않음", error_kind="missing"))
+    verdict, _ = evaluate(repo, base, AdapterResult(error="Stryker is not installed", error_kind="missing"))
     assert verdict["status"] == "error"
-    assert verdict["errors"] == ["Stryker가 설치되어 있지 않음"]
+    assert verdict["errors"] == ["Stryker is not installed"]
 
 
 
@@ -212,16 +212,16 @@ def test_stop_does_not_cache_missing_tool_errors(stop_env, monkeypatch):
 
 
 def test_stop_caches_timeouts_so_unchanged_code_is_not_rerun(stop_env, monkeypatch):
-    stop(AdapterResult(error="시간 초과", error_kind="timeout"), monkeypatch)
+    stop(AdapterResult(error="timed out", error_kind="timeout"), monkeypatch)
     _, fake = stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
     assert fake.calls == []
 
 
 
 def test_stop_error_warns_without_blocking(stop_env, monkeypatch):
-    out, _ = stop(AdapterResult(error="Stryker가 설치되어 있지 않음", error_kind="missing"), monkeypatch)
+    out, _ = stop(AdapterResult(error="Stryker is not installed", error_kind="missing"), monkeypatch)
     assert "decision" not in out
-    assert "Stryker가 설치되어 있지 않음" in out["systemMessage"]
+    assert "Stryker is not installed" in out["systemMessage"]
 
 
 def test_stop_skips_projects_that_are_not_enabled(repo, gate_home, monkeypatch):
@@ -280,7 +280,7 @@ def test_stop_reports_busy_repo_without_caching(stop_env, monkeypatch):
     monkeypatch.setattr(gate, "LOCK_WAIT", 0.2)
     with store.repo_lock(str(stop_env.path.resolve())):
         out, fake = stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
-    assert fake.calls == [] and "검사 중" in out["systemMessage"]
+    assert fake.calls == [] and "is testing this repo" in out["systemMessage"]
     _, fake = stop(AdapterResult(mutants=[mutant(DETECTED)]), monkeypatch)
     assert len(fake.calls) == 1
 
@@ -305,9 +305,9 @@ def test_session_start_ignores_projects_that_are_not_enabled(repo, gate_home, mo
 
 
 def test_stop_never_blocks_even_when_tests_fail(stop_env, monkeypatch):
-    out, _ = stop(AdapterResult(failure="테스트가 현재 실패함"), monkeypatch)
+    out, _ = stop(AdapterResult(failure="tests are failing"), monkeypatch)
     assert "decision" not in out
-    assert "테스트가 현재 실패함" in out["systemMessage"]
+    assert "tests are failing" in out["systemMessage"]
 
 
 def test_stop_lists_only_the_first_survivors(stop_env, monkeypatch):

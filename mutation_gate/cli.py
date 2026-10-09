@@ -33,7 +33,7 @@ def _hook(event):
     except Exception:
         # Never fail silently: the user sees the crash.
         detail = traceback.format_exc(limit=3).strip().splitlines()[-1]
-        result = {"systemMessage": f"mutation-gate 내부 오류 ({event}): {detail}"}
+        result = {"systemMessage": f"mutation-gate internal error ({event}): {detail}"}
     if result:
         print(json.dumps(result, ensure_ascii=False))
     return 0
@@ -42,19 +42,19 @@ def _hook(event):
 def _project():
     root = diff.repo_root(Path.cwd())
     if root is None:
-        sys.exit("git repo 안에서 실행하라")
+        sys.exit("run this inside a git repo")
     return root
 
 
 def _status(_args):
     cfg = store.load_config()
     root = diff.repo_root(Path.cwd())
-    print(f"threshold {cfg['threshold']}% · 시간 예산 {cfg['budget_seconds']}초")
-    print(f"설정 위치 {store.home()}")
+    print(f"threshold {cfg['threshold']}% · budget {cfg['budget_seconds']}s")
+    print(f"config dir {store.home()}")
     if root:
-        print(f"{root}: {'켜짐' if store.is_enabled(root) else '꺼짐'}")
+        print(f"{root}: {'on' if store.is_enabled(root) else 'off'}")
         for mutant_id, info in sorted(store.allowlist(root).items()):
-            print(f"  예외 {mutant_id} ({info['at']}): {info['reason']}")
+            print(f"  allowed {mutant_id} ({info['at']}): {info['reason']}")
 
 
 def _last(_args):
@@ -64,17 +64,17 @@ def _last(_args):
         entry = store.load_session(path.stem)["verdicts"].get(root)
         if entry:
             v = entry["verdict"]
-            print(f"{root} — {v['status']} (세션 {path.stem})")
+            print(f"{root} — {v['status']} (session {path.stem})")
             if "score" in v:
-                print(f"score {v['score']}% ({v['detected']}/{v['total']}), 예외 {v['allowed']}개")
+                print(f"score {v['score']}% ({v['detected']}/{v['total']}), {v['allowed']} allowed")
             for s in v.get("survivors", []):
                 print(f"  {s['path']}:{s['line']} [{s['mutator']}] {s['original']} → {s['replacement']}  (id {s['id']})")
             for text in v.get("failures", []) + v.get("errors", []):
                 print(f"  {text}")
             for p, line, text in v.get("suppressions", []):
-                print(f"  억제 {p}:{line} {text.strip()}")
+                print(f"  suppression {p}:{line} {text.strip()}")
             return
-    print("기록 없음")
+    print("no results yet")
 
 
 def _source_files(root, paths):
@@ -96,33 +96,33 @@ def _source_files(root, paths):
 
 def _print_verdict(root, v, threshold):
     word = {"pass": "PASS", "fail": "FAIL", "error": "ERROR", "unverified": "UNVERIFIED"}[v["status"]]
-    allowed = f", 예외 {v['allowed']}개" if v["allowed"] else ""
-    print(f"mutation-gate test {Path(root).name}: {word} — score {v['score']}% ({v['detected']}/{v['total']}{allowed}), 기준 {threshold}%")
+    allowed = f", {v['allowed']} allowed" if v["allowed"] else ""
+    print(f"mutation-gate test {Path(root).name}: {word} — score {v['score']}% ({v['detected']}/{v['total']}{allowed}), threshold {threshold}%")
     if v["survivors"]:
-        print("살아남은 mutant (코드를 이렇게 바꿔도 테스트가 통과함):")
+        print("Surviving mutants (the tests still pass with these changes):")
         for s in v["survivors"]:
             print(f"  {s['path']}:{s['line']} [{s['mutator']}] {s['original']} → {s['replacement']}  (id {s['id']})")
     for text in v["failures"]:
-        print(f"실패: {text}")
+        print(f"failure: {text}")
     for text in v["errors"]:
-        print(f"오류: {text}")
+        print(f"error: {text}")
     for text in v["warnings"]:
-        print(f"경고: {text}")
+        print(f"warning: {text}")
     if v["status"] == "unverified":
-        print("경고: 대상 파일에 mutant가 하나도 없음 — 테스트로 검증되지 않음")
+        print("warning: the target files have no mutants — nothing was verified by the tests")
 
 
 def _test(args):
     root = _project()
     files = _source_files(root, args.paths)
     if not files:
-        print("검사할 소스 파일 없음 — JS/TS 또는 Python 소스 경로를 지정하라 (테스트 파일 말고 테스트 대상)")
+        print("No source files to test — give JS/TS or Python source paths (the code under test, not the test files)")
         return 2
     cfg = store.load_config()
-    print(f"검사 대상 {len(files)}개: {', '.join(files[:10])}{' …' if len(files) > 10 else ''}", flush=True)
+    print(f"Testing {len(files)} file(s): {', '.join(files[:10])}{' …' if len(files) > 10 else ''}", flush=True)
     lock = store.repo_lock(root)
     if not lock.acquire(timeout=gate.LOCK_WAIT):
-        print("다른 세션이 이 repo를 검사 중 — 잠시 뒤 다시 실행")
+        print("Another session is testing this repo — try again shortly")
         return 2
     try:
         verdict = gate.check(root, files, cfg["threshold"], store.allowed_ids(root), args.budget)
@@ -135,7 +135,7 @@ def _test(args):
 
 def _mutant_id(text):
     if not re.fullmatch(r"[0-9a-f]{8}", text):
-        raise argparse.ArgumentTypeError("mutant id는 16진수 8자리")
+        raise argparse.ArgumentTypeError("a mutant id is 8 hex digits")
     return text
 
 
@@ -147,23 +147,23 @@ def _threshold(text):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="mutation-gate", description="Claude 턴 종료 시 mutation testing 게이트")
+    parser = argparse.ArgumentParser(prog="mutation-gate", description="Mutation testing for Claude Code")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    hook = sub.add_parser("hook", help="Claude Code가 호출 (직접 실행 X)")
+    hook = sub.add_parser("hook", help="called by Claude Code hooks; do not run by hand")
     hook.add_argument("event", choices=sorted(HOOKS))
-    test = sub.add_parser("test", help="소스 파일 전체를 mutation testing (경로 없으면 커밋 안 된 변경 파일)")
+    test = sub.add_parser("test", help="mutation-test whole source files (default: the uncommitted ones)")
     test.add_argument("paths", nargs="*")
-    test.add_argument("--budget", type=int, default=540, help="최대 실행 시간(초)")
-    sub.add_parser("status", help="설정과 현재 프로젝트 상태")
-    sub.add_parser("last", help="현재 프로젝트의 마지막 판정 상세")
-    allow = sub.add_parser("allow", help="equivalent mutant 예외 승인")
+    test.add_argument("--budget", type=int, default=540, help="maximum run time in seconds")
+    sub.add_parser("status", help="settings and the current repo's state")
+    sub.add_parser("last", help="details of the last result for the current repo")
+    allow = sub.add_parser("allow", help="accept an equivalent mutant so it no longer counts")
     allow.add_argument("id", type=_mutant_id)
     allow.add_argument("reason", nargs="*")
-    disallow = sub.add_parser("disallow", help="예외 취소")
+    disallow = sub.add_parser("disallow", help="count an accepted mutant again")
     disallow.add_argument("id", type=_mutant_id)
-    sub.add_parser("on", help="현재 프로젝트에서 켜기")
-    sub.add_parser("off", help="현재 프로젝트에서 끄기")
-    threshold = sub.add_parser("threshold", help="통과 기준 점수 (0-100)")
+    sub.add_parser("on", help="turn the end-of-turn report on for the current repo")
+    sub.add_parser("off", help="turn the end-of-turn report off for the current repo")
+    threshold = sub.add_parser("threshold", help="passing score (0-100)")
     threshold.add_argument("value", type=_threshold)
     args = parser.parse_args(argv)
 
@@ -177,18 +177,19 @@ def main(argv=None):
         _last(args)
     elif args.cmd == "allow":
         store.allow(_project(), args.id, " ".join(args.reason))
-        print(f"예외 승인: {args.id}")
+        print(f"allowed: {args.id}")
     elif args.cmd == "disallow":
         store.disallow(_project(), args.id)
-        print(f"예외 취소: {args.id}")
+        print(f"no longer allowed: {args.id}")
     elif args.cmd in ("on", "off"):
         root = _project()
         store.set_enabled(root, args.cmd == "on")
-        print(f"{root}: {'켜짐' if args.cmd == 'on' else '꺼짐'}")
+        print(f"{root}: {args.cmd}")
         if args.cmd == "on":
             tools = [t for t in gate.TOOL_PATHS if (Path(root) / t).exists()]
-            print(f"설치된 도구: {', '.join(tools)}" if tools else
-                  "설치된 도구 없음 — JS/TS는 @stryker-mutator/core·vitest-runner, Python은 .venv에 mutmut 설치 필요")
+            print(f"installed tools: {', '.join(tools)}" if tools else
+                  "no mutation tool installed — JS/TS needs @stryker-mutator/core and @stryker-mutator/vitest-runner, "
+                  "Python needs mutmut in .venv")
     elif args.cmd == "threshold":
         store.update_config(threshold=args.value)
         print(f"threshold {args.value}%")

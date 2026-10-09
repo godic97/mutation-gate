@@ -43,7 +43,7 @@ def _run_adapters(repo, by_lang, budget, adapters, full_budget):
         if result.error:
             out["errors"].append(result.error)
     if out["ignored"]:
-        out["warnings"].append(f"검사 대상 mutant {out['ignored']}개가 기존 억제 주석 때문에 실행되지 않음")
+        out["warnings"].append(f"{out['ignored']} mutant(s) were not run because of existing suppression comments")
     return out
 
 
@@ -81,10 +81,10 @@ def evaluate(repo, base, current, threshold, allowed, budget, adapters=None, ful
     adapters = ADAPTERS if adapters is None else adapters
     ch = diff.changes(repo, base, current)
     # Things that change what the score means: reported next to it, never hidden.
-    notes = [f"억제 주석 추가됨 {p}:{n} `{t.strip()}`" for p, n, t in diff.find_suppressions(ch.added)]
-    notes += [f"테스트 비활성화 {p}:{n} `{t.strip()}`" for p, n, t in diff.find_test_skips(ch.added)]
-    notes += [f"mutation 설정 변경 ({name})" for name in diff.mutation_config_changes(repo, base)]
-    notes += [f"테스트 파일 삭제됨: {rel}" for rel in ch.deleted_tests]
+    notes = [f"suppression comment added {p}:{n} `{t.strip()}`" for p, n, t in diff.find_suppressions(ch.added)]
+    notes += [f"test disabled {p}:{n} `{t.strip()}`" for p, n, t in diff.find_test_skips(ch.added)]
+    notes += [f"mutation tool settings changed ({name})" for name in diff.mutation_config_changes(repo, base)]
+    notes += [f"test file deleted: {rel}" for rel in ch.deleted_tests]
     by_lang = {}
     for rel, lines in ch.added.items():
         lang = diff.classify(rel)
@@ -119,7 +119,7 @@ def _name(repo):
 
 
 def _summary(repo, v):
-    allowed = f", 예외 {v['allowed']}개" if v.get("allowed") else ""
+    allowed = f", {v['allowed']} allowed" if v.get("allowed") else ""
     return f"{_name(repo)} {v['score']}% ({v['detected']}/{v['total']}{allowed})"
 
 
@@ -133,7 +133,7 @@ def _verdict(sid, repo, entry, cfg, deadline):
     # One mutation run per repo at a time: sessions share mutants/ and the Stryker work dir.
     lock = store.repo_lock(repo)
     if not lock.acquire(timeout=min(LOCK_WAIT, max(0, deadline - time.monotonic() - 10))):
-        return {"status": "error", "errors": ["다른 세션이 이 repo를 검사 중 — 다음 종료 때 다시 검사"]}
+        return {"status": "error", "errors": ["another session is testing this repo — will retry at the next stop"]}
     try:
         budget = max(1, int(deadline - time.monotonic()))
         verdict = evaluate(repo, entry["base"], current, cfg["threshold"], allowed, budget,
@@ -161,19 +161,19 @@ def report_lines(repo, v, threshold):
     name = _name(repo)
     lines = []
     if v["status"] == "pass":
-        lines.append(f"mutation-gate ✓ {_summary(repo, v)}" if v["total"] else f"mutation-gate ✓ {name}: 바뀐 줄이 주석·빈 줄뿐")
+        lines.append(f"mutation-gate ✓ {_summary(repo, v)}" if v["total"] else f"mutation-gate ✓ {name}: only comments or blank lines changed")
     elif v["status"] == "fail":
-        lines.append(f"mutation-gate ✗ {_summary(repo, v)} — 기준 {threshold}%, 살아남은 mutant {len(v['survivors'])}개")
+        lines.append(f"mutation-gate ✗ {_summary(repo, v)} — threshold {threshold}%, {len(v['survivors'])} surviving mutant(s)")
         for s in v["survivors"][:BANNER_SURVIVORS]:
             lines.append(f"  {s['path']}:{s['line']} {s['original']} → {s['replacement']}  (id {s['id']})")
         if len(v["survivors"]) > BANNER_SURVIVORS:
-            lines.append(f"  … 외 {len(v['survivors']) - BANNER_SURVIVORS}개 (mutation-gate last)")
+            lines.append(f"  … {len(v['survivors']) - BANNER_SURVIVORS} more (mutation-gate last)")
     elif v["status"] == "unverified":
-        lines.append(f"mutation-gate ⚠ {name}: 바뀐 코드에 mutant 0개 — 테스트로 검증되지 않음")
+        lines.append(f"mutation-gate ⚠ {name}: the changed code has no mutants — not verified by the tests")
     for failure in v.get("failures", []):
         lines.append(f"mutation-gate ✗ {name}: {failure}")
     for error in v.get("errors", []):
-        lines.append(f"mutation-gate ⚠ {name}: 검사 못 함 — {error}")
+        lines.append(f"mutation-gate ⚠ {name}: could not test — {error}")
     for warning in v.get("warnings", []):
         lines.append(f"mutation-gate ⚠ {name}: {warning}")
     return lines
@@ -189,7 +189,7 @@ def on_stop(payload):
         session = store.load_session(sid)
         if not session.get("hinted") and any((Path(root) / p).exists() for p in TOOL_PATHS):
             store.set_session_value(sid, "hinted", True)
-            lines.append(f"mutation-gate: {_name(root)}에서는 꺼져 있음. 턴마다 검사하려면 `! mutation-gate on`")
+            lines.append(f"mutation-gate: off in {_name(root)}. To test every turn: `! mutation-gate on`")
     session = store.load_session(sid)
 
     deadline = time.monotonic() + cfg["budget_seconds"]
@@ -197,14 +197,14 @@ def on_stop(payload):
         if not isinstance(entry, dict) or not store.is_enabled(repo):
             continue
         if not Path(repo).is_dir():
-            lines.append(f"mutation-gate ⚠ {_name(repo)}: repo가 사라져 검사 못 함 ({repo})")
+            lines.append(f"mutation-gate ⚠ {_name(repo)}: the repo is gone, not tested ({repo})")
             continue
         try:
             verdict = _verdict(sid, repo, entry, cfg, deadline)
             if diff.stash_ref(repo) != entry.get("stash", ""):
-                lines.append(f"mutation-gate ⚠ {_name(repo)}: 세션 중 git stash가 생김 — stash된 변경은 검사되지 않음")
+                lines.append(f"mutation-gate ⚠ {_name(repo)}: git stash was used this session — stashed changes are not tested")
         except Exception as exc:  # one broken repo must not skip the others
-            verdict = {"status": "error", "errors": [f"내부 오류: {type(exc).__name__}: {exc}"]}
+            verdict = {"status": "error", "errors": [f"internal error: {type(exc).__name__}: {exc}"]}
         if verdict["status"] != "clean":
             lines += report_lines(repo, verdict, cfg["threshold"])
     return {"systemMessage": "\n".join(lines)} if lines else None

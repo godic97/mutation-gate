@@ -87,8 +87,8 @@ def _binary(repo):
 def _install_hint(repo):
     python = next((repo / v / "bin" / "python" for v in (".venv", "venv") if (repo / v / "bin" / "python").exists()), None)
     if python:
-        return f"mutmut가 프로젝트 venv에 없음. 설치: uv pip install --python {shlex.quote(str(python))} mutmut"
-    return (f"mutmut를 찾을 수 없음 ({repo}/.venv 없음). 설치: cd {shlex.quote(str(repo))} && "
+        return f"mutmut is not in the project's venv. Install: uv pip install --python {shlex.quote(str(python))} mutmut"
+    return (f"mutmut not found (no {repo}/.venv). Install: cd {shlex.quote(str(repo))} && "
             "uv venv && uv pip install pytest mutmut")
 
 
@@ -184,7 +184,7 @@ def run(repo, changed, budget):
     if binary is None:
         return AdapterResult(error=_install_hint(repo), error_kind="missing")
     if _tracked(repo, os.path.relpath(binary, repo)):
-        return AdapterResult(error=f"git이 추적하는 {binary}는 실행하지 않음 (repo가 넣어둔 실행 파일일 수 있음)", error_kind="missing")
+        return AdapterResult(error=f"not running {binary}: git tracks it, so the repo may have put it there", error_kind="missing")
     deadline = time.monotonic() + budget
 
     origin, unverified, sources = {}, [], {}
@@ -193,20 +193,20 @@ def run(repo, changed, budget):
             sources[rel] = (repo / rel).read_text().split("\n")
             funcs = _touched("\n".join(sources[rel]), changed[rel])
         except (OSError, SyntaxError) as exc:
-            return AdapterResult(failure=f"{rel}를 파싱할 수 없음: {exc}")
+            return AdapterResult(failure=f"could not parse {rel}: {exc}")
         module = module_name(rel)
         for name, lo, hi, mutable in funcs:
             if mutable and module:
                 origin[f"{module}.{name}"] = (rel, lo, hi)
             else:
-                unverified.append(f"mutmut이 변이하지 않는 함수 변경 (데코레이터): {rel}:{lo} {name.split('ǁ')[-1].removeprefix('x_')}")
+                unverified.append(f"changed function mutmut does not mutate (decorated): {rel}:{lo} {name.split('ǁ')[-1].removeprefix('x_')}")
     patterns = [f"{qualified}__mutmut_*" for qualified in origin]
     if not patterns:
         return AdapterResult(unverified=unverified)
 
     work = _WorkDir(repo)
     if not work.create():
-        return AdapterResult(error=f"{work.path}/ 가 이미 있음 (mutation-gate가 만든 것이 아님). 옮긴 뒤 다시 시도", error_kind="missing")
+        return AdapterResult(error=f"{work.path}/ already exists and mutation-gate did not create it. Move it and try again", error_kind="missing")
     env = {**os.environ, "NO_COLOR": "1"}
 
     def mm(*args, timeout=None):
@@ -220,26 +220,26 @@ def run(repo, changed, budget):
         if "filtered for specific mutants, but nothing matches" in lowered:
             return AdapterResult(unverified=unverified)
         if "could not find any test case for any mutant" in lowered:
-            return AdapterResult(failure="바뀐 코드를 실행하는 테스트가 하나도 없음 (mutmut)")
+            return AdapterResult(failure="no test runs the changed code (mutmut)")
         if "module name starts with `src.`" in lowered:
             example = module_name(next(iter(sorted(changed))))
             return AdapterResult(
-                error=f"테스트가 `src.` 경로로 import함 — mutmut는 이를 추적하지 못함. `from {example} import …`처럼 "
-                      "패키지 이름으로 import하라 (pyproject [tool.pytest.ini_options] pythonpath = [\"src\"])",
+                error=f"the tests import through `src.`, which mutmut cannot trace. Import by package name, like "
+                      f"`from {example} import …` (pyproject [tool.pytest.ini_options] pythonpath = [\"src\"])",
                 error_kind="sandbox",
             )
         if "failed to collect stats" in lowered or "failed to run clean test" in lowered:
             left = max(1, int(deadline - time.monotonic()))
             if _plain_pytest_passes(repo, binary, min(left, 120)):
                 return AdapterResult(
-                    error="mutmut sandbox(mutants/)에서만 테스트가 실패함 — 테스트가 복사되지 않은 파일(데이터·형제 패키지)을 "
-                          "쓰는 듯. pyproject [tool.mutmut] also_copy 설정 확인",
+                    error="the tests fail only in mutmut's sandbox (mutants/); they seem to use files mutmut does not copy "
+                          "(data, sibling packages). Check also_copy in pyproject [tool.mutmut]",
                     error_kind="sandbox",
                 )
             failed = [l for l in output.splitlines() if l.startswith(("FAILED", "ERROR"))]
-            return AdapterResult(failure="테스트가 현재 실패함 (mutmut clean run):\n" + tail("\n".join(failed), 800))
+            return AdapterResult(failure="the tests are failing (mutmut clean run):\n" + tail("\n".join(failed), 800))
         if proc.returncode != 0:
-            return AdapterResult(error=f"mutmut 실행 실패 (exit {proc.returncode}):\n{tail(output)}", error_kind="crash")
+            return AdapterResult(error=f"mutmut failed (exit {proc.returncode}):\n{tail(output)}", error_kind="crash")
 
         statuses = {}
         for line in mm("results", "--all", "true").stdout.splitlines():
@@ -248,13 +248,13 @@ def run(repo, changed, budget):
                 statuses[match.group(1)] = match.group(2).strip()
         unchecked = [n for n, s in statuses.items() if s == "not checked"]
         if unchecked:
-            return AdapterResult(error=f"mutmut가 mutant {len(unchecked)}개를 검사하지 못함 (검사 미완료)", error_kind="crash")
+            return AdapterResult(error=f"mutmut did not check {len(unchecked)} mutant(s) (incomplete run)", error_kind="crash")
 
         names = [n for n, s in statuses.items() if s not in NEUTRAL]
         with ThreadPoolExecutor(max_workers=8) as pool:
             shows = list(pool.map(lambda n: mm("show", n).stdout, names))
     except subprocess.TimeoutExpired:
-        return AdapterResult(error=f"mutmut가 {budget}초 안에 끝나지 않음 (검사 미완료)", error_kind="timeout")
+        return AdapterResult(error=f"mutmut did not finish within {budget}s (incomplete run)", error_kind="timeout")
     finally:
         work.remove()
 
@@ -277,5 +277,5 @@ def run(repo, changed, budget):
     number_occurrences(mutants)
     result = AdapterResult(mutants=sorted(mutants, key=lambda m: (m.path, m.line, m.replacement)), unverified=unverified)
     if unmapped:
-        result.error, result.error_kind = f"mutmut show 결과 {unmapped}개를 소스 줄에 매핑하지 못함", "crash"
+        result.error, result.error_kind = f"could not map {unmapped} mutmut show result(s) to source lines", "crash"
     return result

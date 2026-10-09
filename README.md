@@ -87,7 +87,6 @@ An equivalent mutant changes the code without changing its behaviour, for exampl
 - mutmut 3 mutates only top-level functions and methods of top-level classes without decorators (a lone `@staticmethod` or `@classmethod` is fine). Changes elsewhere are reported as not verified.
 - mutmut copies only the source and test directories into its sandbox. Tests that read other files fail there, and the plugin reports a sandbox error. Fix it with `also_copy` in `[tool.mutmut]`.
 - Lines pulled in by `git pull` during a session count as changed.
-- Messages are in Korean.
 
 ## Development
 

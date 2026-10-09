@@ -55,7 +55,7 @@ def _read_strict(path, default):
     try:
         return json.loads(path.read_text())
     except ValueError as exc:
-        raise CorruptFile(f"{path} 파싱 실패 ({exc}). 직접 고친 뒤 다시 실행하라.") from exc
+        raise CorruptFile(f"could not parse {path} ({exc}); fix it by hand and run again") from exc
 
 
 class _flock:

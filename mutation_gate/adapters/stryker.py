@@ -31,7 +31,7 @@ def _install_hint(project):
         cmd = f"yarn add -D {pkgs}"
     else:
         cmd = f"npm install -D {pkgs}"
-    return f"Stryker가 설치되어 있지 않음. 설치: cd {shlex.quote(str(project))} && {cmd}"
+    return f"Stryker is not installed. Install: cd {shlex.quote(str(project))} && {cmd}"
 
 
 def _project_dir(repo, rel):
@@ -144,9 +144,9 @@ def _run_project(repo, project, changed, budget):
     if binary is None:
         return AdapterResult(error=_install_hint(project), error_kind="missing")
     if _tracked(repo, binary):
-        return AdapterResult(error=f"git이 추적하는 {binary}는 실행하지 않음 (repo가 넣어둔 실행 파일일 수 있음)", error_kind="missing")
+        return AdapterResult(error=f"not running {binary}: git tracks it, so the repo may have put it there", error_kind="missing")
     if not (project / "node_modules" / "vitest").exists() and not (repo / "node_modules" / "vitest").exists():
-        return AdapterResult(error=f"{project}에 vitest가 없음 — vitest 프로젝트만 지원", error_kind="missing")
+        return AdapterResult(error=f"no vitest in {project}; only vitest projects are supported", error_kind="missing")
 
     prefix = os.path.relpath(project, repo) if project != repo else ""
     # Whole files, not changed lines: Stryker only mutates nodes that lie entirely inside a range,
@@ -160,20 +160,20 @@ def _run_project(repo, project, changed, budget):
         return AdapterResult()
     if "There were failed tests in the initial test run" in output:
         errors = [l for l in output.splitlines() if "ERROR" in l or "✗" in l or "×" in l]
-        return AdapterResult(failure="테스트가 현재 실패함 (Stryker initial test run):\n" + tail("\n".join(errors), 800))
+        return AdapterResult(failure="the tests are failing (Stryker initial test run):\n" + tail("\n".join(errors), 800))
     if "No tests were executed" in output and "failed to find test files related" in output:
         # No test imports the changed files: run every test, so their mutants show up as NoCoverage.
         output, code, report = _run_once(binary, project, work, mutate, False, budget)
     if "No tests were executed" in output:
-        return AdapterResult(failure="프로젝트에서 실행되는 테스트가 하나도 없음 (Stryker: No tests were executed)")
+        return AdapterResult(failure="no test runs in this project (Stryker: No tests were executed)")
     if code != 0 or not report.exists():
-        return AdapterResult(error=f"Stryker 실행 실패 (exit {code}):\n{tail(output)}", error_kind="crash")
+        return AdapterResult(error=f"Stryker failed (exit {code}):\n{tail(output)}", error_kind="crash")
     data = json.loads(report.read_text())
     report.unlink()
     files = {str(Path(prefix) / f) if prefix else f for f in data.get("files", {})}
     missing = sorted(set(changed) - files)
     if missing and match and int(match.group(1)) > 0:
-        return AdapterResult(error=f"Stryker가 바뀐 파일을 찾지 못함: {', '.join(missing)}", error_kind="crash")
+        return AdapterResult(error=f"Stryker could not find the changed files: {', '.join(missing)}", error_kind="crash")
     mutants, ignored = _parse(data, changed, prefix)
     return AdapterResult(mutants=mutants, ignored=ignored)
 
@@ -189,7 +189,7 @@ def run(repo, changed, budget):
         try:
             result = _run_project(repo, project, groups[project], budget)
         except subprocess.TimeoutExpired:
-            result = AdapterResult(error=f"Stryker가 {budget}초 안에 끝나지 않음 (검사 미완료)", error_kind="timeout")
+            result = AdapterResult(error=f"Stryker did not finish within {budget}s (incomplete run)", error_kind="timeout")
         merged.mutants += result.mutants
         merged.ignored += result.ignored
         merged.failure = merged.failure or result.failure

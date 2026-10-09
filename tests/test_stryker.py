@@ -101,7 +101,7 @@ def test_project_without_any_tests_is_a_failure(js):
     result = stryker.run(str(js.path), {"src/calc.ts": {2}}, budget=120)
 
     assert result.error is None
-    assert "테스트" in result.failure
+    assert "no test" in result.failure
 
 
 def test_failing_tests_are_a_failure(js):
@@ -110,7 +110,7 @@ def test_failing_tests_are_a_failure(js):
     result = stryker.run(str(js.path), {"src/calc.ts": {2}}, budget=120)
 
     assert result.error is None
-    assert "실패" in result.failure
+    assert "failing" in result.failure
 
 
 def test_missing_stryker_is_a_tool_error_with_install_hint(repo, gate_home):
