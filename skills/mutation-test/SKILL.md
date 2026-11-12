@@ -29,6 +29,8 @@ It uses a real mutation tool per language: Stryker (JS/TS with vitest or jest), 
 
 Each surviving mutant is a code change the tests did not notice, shown as `file:line [mutator] original → replacement (id …)`.
 
+If the user asked only to verify or QA the software (for example the `qa` skill of sw-qa is running), stop after measuring: report the survivors as test gaps, change no tests and install nothing (use LLM mode when the tool is missing). Otherwise:
+
 For each one, add or tighten an assertion that fails on that change: boundary values, exact return values, branch outcomes, error paths. Test behaviour, not implementation details. In Python, import the code by its package name (`from pkg.mod import f`), not through `src.`: mutmut cannot trace `src.` imports.
 
 Rerun the same command until it prints `PASS`, or until only survivors remain that no test can kill (equivalent mutants, such as `x < lo` → `x <= lo` in a clamp that returns `lo` either way).

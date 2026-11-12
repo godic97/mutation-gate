@@ -26,7 +26,8 @@ REMINDER = (
     "Before you finish, mutation-test the code under test (the source files, not the test files): run "
     "`mutation-gate test <source files>` as a command of its own (no pipes or `&&`) with a Bash timeout of 600000, "
     "then add assertions until it prints PASS, "
-    "as the mutation-test skill describes. Quote its final summary line. For a language mutation-gate has "
+    "as the mutation-test skill describes; if the user asked only to verify or QA the software, not to change tests, "
+    "report the surviving mutants as test gaps instead. Quote its final summary line. For a language mutation-gate has "
     "no tool for, use LLM mode (`mutation-gate mutate`). Skip this only if no source code is under test."
 )
 

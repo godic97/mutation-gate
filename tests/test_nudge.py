@@ -16,6 +16,7 @@ def test_writing_a_test_file_reminds_claude_to_mutation_test(gate_home, path):
     out = post("Write", file_path=path, content="x")
     assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "mutation-gate test" in context(out)
+    assert "test gaps" in context(out)
 
 
 @pytest.mark.parametrize("command", [
