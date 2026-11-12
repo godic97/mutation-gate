@@ -64,7 +64,7 @@ mutation-gate does not install anything by itself; when a tool is missing, `muta
 mutation-gate test [paths...] [--budget SECONDS]
 ```
 
-Mutation-tests whole source files: every source file under the given paths, or the uncommitted source files when no path is given. Test files, configs and type declarations are skipped. It prints the score, every surviving mutant as `file:line [mutator] original → replacement (id …)`, and `PASS` or `FAIL` against the threshold (default 80%). It exits 0 on pass, 1 on fail and 2 when there is nothing to test or the tool could not run. For a language without an adapter it says so and points at LLM mode.
+Mutation-tests whole source files: every source file under the given paths, or the uncommitted source files when no path is given. Test files, configs and type declarations are skipped. It prints the score, every surviving mutant as `file:line [mutator] original → replacement (id …)`, and `PASS` or `FAIL` against the threshold (default 80%). It exits 0 on pass, 1 on fail and 2 when there is nothing to test or the tool could not run. Usage errors also exit 2, with the reason on stderr: running outside a git repository, a path outside the repository, or a manifest or spec that cannot be read as a JSON object; `mutate` and `verify` use the same codes. For a language without an adapter it says so and points at LLM mode.
 
 ## LLM mode
 

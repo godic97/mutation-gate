@@ -50,10 +50,16 @@ def _hook(event):
     return 0
 
 
+def _usage_error(message):
+    """Exit 2 like "nothing was verified", so a usage error is never read as a failing score (exit 1)."""
+    print(message, file=sys.stderr)
+    sys.exit(2)
+
+
 def _project():
     root = diff.repo_root(Path.cwd())
     if root is None:
-        sys.exit("run this inside a git repo")
+        _usage_error("run this inside a git repo")
     return root
 
 
@@ -94,6 +100,8 @@ def _source_files(root, paths):
         listed = []
         for arg in paths:
             target = (Path.cwd() / arg).resolve()
+            if not target.is_relative_to(root):
+                _usage_error(f"{arg} is outside the repository {root}")
             rel = str(target.relative_to(root)) if target != Path(root) else "."
             out = diff._git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", f":(literal){rel}")
             listed += [f for f in out.stdout.split("\0") if f]
@@ -164,9 +172,12 @@ def _test(args):
 
 def _load_json(path):
     try:
-        return json.loads(Path(path).read_text())
+        data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as exc:
-        sys.exit(f"cannot read {path}: {exc}")
+        _usage_error(f"cannot read {path}: {exc}")
+    if not isinstance(data, dict):
+        _usage_error(f"cannot read {path}: expected a JSON object")
+    return data
 
 
 def _mutate(args):

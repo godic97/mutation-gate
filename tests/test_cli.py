@@ -296,3 +296,25 @@ def test_test_command_does_not_call_a_test_file_unsupported(repo, gate_home):
     out = cli("test", "tests/test_age.py", cwd=repo.path)
 
     assert out.returncode == 2 and "no mutation adapter" not in out.stdout
+
+
+def test_usage_errors_exit_2_not_like_a_failing_score(repo, gate_home, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    listed = tmp_path / "list.json"
+    listed.write_text("[]")
+    stray = tmp_path / "stray.py"
+    stray.write_text("x = 1\n")
+
+    cases = [
+        (("test", "x.py"), outside, "inside a git repo"),
+        (("mutate", str(listed)), outside, "inside a git repo"),
+        (("mutate", str(tmp_path / "missing.json")), repo.path, "cannot read"),
+        (("mutate", str(listed)), repo.path, "cannot read"),
+        (("verify", str(listed)), repo.path, "cannot read"),
+        (("test", str(stray)), repo.path, "outside the repository"),
+    ]
+    for args, cwd, message in cases:
+        out = cli(*args, cwd=cwd)
+        assert out.returncode == 2, (args, out.stdout + out.stderr)
+        assert message in out.stderr and "Traceback" not in out.stderr, (args, out.stderr)
