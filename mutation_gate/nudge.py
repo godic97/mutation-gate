@@ -11,12 +11,19 @@ import re
 from . import diff, store
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# A test runner counts only where a command starts (after `cd x &&`, `|`, `;` ...), once
+# environment assignments and wrappers such as `npx`, `uv run` or `timeout 60` are stripped,
+# so `cat pytest.ini` or `pip show pytest` do not count as running tests.
+COMMAND_SPLIT = re.compile(r"&&|\|\||[;|&\n(){}]")
+COMMAND_PREFIX = re.compile(
+    r"^(?:\w+=\S*\s+|(?:sudo|env|time|nice|nohup|exec|xvfb-run|npx|bunx|pnpx)\s+|timeout\s+\S+\s+"
+    r"|(?:uv|poetry|pipenv|pdm|hatch)\s+run\s+|(?:pnpm|bundle)\s+exec\s+|coverage\s+run\s+)"
+)
 TEST_COMMAND = re.compile(
-    r"(^|[\s;&|(/])(pytest|py\.test|vitest|jest)\b"
-    r"|\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b"
-    r"|\bpython[\d.]*\s+-m\s+pytest\b"
-    r"|\b(cargo|go|dotnet|sbt)\s+test\b|\b(mvn|mvnw|gradle|gradlew)\s+(\S+\s+)*test\b|\bgradlew\s+test\b"
-    r"|\brspec\b|\brake\s+test\b|\bphpunit\b|\bctest\b|\bmake\s+(check|test)\b"
+    r"^(?:\S*/)?(?:pytest|py\.test|vitest|jest|rspec|phpunit|ctest)\b"
+    r"|^(?:\S*/)?python[\d.]*\s+-m\s+pytest\b|^-m\s+pytest\b"
+    r"|^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|^(?:cargo|go|dotnet|sbt)\s+test\b"
+    r"|^(?:\S*/)?(?:mvn|mvnw|gradle|gradlew)\s+(?:\S+\s+)*test\b|^rake\s+test\b|^make\s+(?:check|test)\b"
 )
 # Test files of languages handled in LLM mode (diff.is_test covers the ones with adapters).
 OTHER_TEST_FILE = re.compile(r"(_spec|_test)\.rb$|Test\.php$|(^|/)test_[^/]*\.(c|cc|cpp)$|_test\.(c|cc|cpp)$")
@@ -46,7 +53,17 @@ def _touches_tests(tool, tool_input, cwd):
         rel = _relative(path, cwd)
         return diff.is_test(rel) or bool(OTHER_TEST_FILE.search(rel))
     if tool == "Bash":
-        return bool(TEST_COMMAND.search(str(tool_input.get("command") or "")))
+        return runs_tests(str(tool_input.get("command") or ""))
+    return False
+
+
+def runs_tests(command):
+    for segment in COMMAND_SPLIT.split(command):
+        segment = segment.strip()
+        while (prefix := COMMAND_PREFIX.match(segment)):
+            segment = segment[prefix.end():]
+        if TEST_COMMAND.match(segment):
+            return True
     return False
 
 

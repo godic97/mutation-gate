@@ -252,3 +252,47 @@ def test_on_lists_user_scope_tools(repo, gate_home, tmp_path):
     out = cli("on", cwd=repo.path, env={"HOME": str(fake_home), "PATH": "/usr/bin:/bin"}).stdout
 
     assert "cargo-mutants" in out
+
+
+def test_mutate_with_every_mutation_skipped_verifies_nothing(repo, gate_home, tmp_path):
+    repo.write("calc.py", "x = 1\nx = 1\n")
+    repo.commit()
+    spec = tmp_path / "m.json"
+    spec.write_text(json.dumps({"mutations": [{"file": "calc.py", "find": "x = 1", "replace": "x = 2"}]}))
+
+    out = cli("mutate", str(spec), "--test-cmd", "true", cwd=repo.path)
+
+    assert out.returncode == 2, out.stdout + out.stderr
+    assert "UNVERIFIED" in out.stdout and "PASS" not in out.stdout
+    assert "no mutation ran" in out.stdout
+
+
+def test_test_command_points_a_language_without_adapter_at_llm_mode(repo, gate_home):
+    repo.write("lib/user.rb", "class User; end\n")
+    repo.commit()
+
+    out = cli("test", "lib/user.rb", cwd=repo.path)
+
+    assert out.returncode == 2
+    assert "no mutation adapter" in out.stdout and "lib/user.rb" in out.stdout and "mutation-gate mutate" in out.stdout
+    assert "not of the test files" not in out.stdout
+
+
+def test_test_command_names_files_without_adapter_next_to_tested_ones(repo, gate_home):
+    repo.write("src/pkg/age.py", "def is_adult(age):\n    return age >= 18\n")
+    repo.write("lib/user.rb", "class User; end\n")
+    repo.commit()
+
+    out = cli("test", "src/pkg/age.py", "lib/user.rb", cwd=repo.path)
+
+    assert "Testing 1 file(s): src/pkg/age.py" in out.stdout
+    assert "no mutation adapter" in out.stdout and "lib/user.rb" in out.stdout
+
+
+def test_test_command_does_not_call_a_test_file_unsupported(repo, gate_home):
+    repo.write("tests/test_age.py", "def test_x():\n    pass\n")
+    repo.commit()
+
+    out = cli("test", "tests/test_age.py", cwd=repo.path)
+
+    assert out.returncode == 2 and "no mutation adapter" not in out.stdout

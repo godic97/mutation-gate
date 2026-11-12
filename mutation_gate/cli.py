@@ -120,14 +120,32 @@ def _print_verdict(root, v, threshold, label="test"):
     for text in v["warnings"]:
         print(f"warning: {text}")
     if v["status"] == "unverified":
-        print("warning: the target files have no mutants — nothing was verified by the tests")
+        what = "no mutation ran" if label == "mutate" else "the target files have no mutants"
+        print(f"warning: {what} — nothing was verified by the tests")
+
+
+def _without_adapter(root, paths):
+    """Files named directly on the command line that are neither tests nor in an adapter's language."""
+    found = []
+    for arg in paths:
+        target = (Path.cwd() / arg).resolve()
+        if target.is_file() and target.is_relative_to(root):
+            rel = str(target.relative_to(root))
+            if not diff.classify(rel) and not diff.is_test(rel):
+                found.append(rel)
+    return found
 
 
 def _test(args):
     root = _project()
     files = _source_files(root, args.paths)
+    unsupported = _without_adapter(root, args.paths)
+    if unsupported:
+        print(f"warning: no mutation adapter for {', '.join(unsupported)} — use LLM mode: write a find/replace "
+              "manifest and run `mutation-gate mutate` (mutation-test skill)")
     if not files:
-        print("No source files to test — give the paths of the code under test, not of the test files")
+        if not unsupported:
+            print("No source files to test — give the paths of the code under test, not of the test files")
         return 2
     cfg = store.load_config()
     print(f"Testing {len(files)} file(s): {', '.join(files[:10])}{' …' if len(files) > 10 else ''}", flush=True)

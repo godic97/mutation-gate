@@ -74,3 +74,23 @@ def test_writing_tests_in_other_languages_reminds(gate_home, path):
 def test_llm_mode_runs_also_end_the_reminders(gate_home, command):
     assert post("Bash", command=command) is None
     assert post("Bash", command="pytest") is None
+
+
+@pytest.mark.parametrize("command", [
+    "cat pytest.ini", "pip show pytest", "grep -rn pytest.mark.skip tests/", "echo run pytest later",
+    "cat .rspec", "gem install rspec", "npm install --save-dev jest", "less vitest.config.ts",
+])
+def test_commands_that_only_mention_a_runner_get_no_reminder(gate_home, command):
+    assert post("Bash", command=command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "jest", "npx jest --ci", "FOO=1 pytest -q", "timeout 120 pytest", "cd app && pytest -x",
+    "poetry run pytest", "coverage run -m pytest", ".venv/bin/pytest -q", "pytest -q | tail -5", "FOO=1 timeout 60 pytest",
+])
+def test_runner_at_command_position_reminds(gate_home, command):
+    assert "mutation-gate test" in context(post("Bash", command=command))
+
+
+def test_an_edit_without_a_path_gets_no_reminder(gate_home):
+    assert post("Write", content="x") is None

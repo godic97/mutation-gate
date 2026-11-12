@@ -191,7 +191,7 @@ def run(root, data, command, budget):
     if skipped:
         run_info["warnings"].append(f"{len(skipped)} mutation(s) skipped — they verified nothing")
 
-    verdict = gate._verdict_dict(run_info, cfg["threshold"], store.allowed_ids(str(root)), executable=bool(planned))
+    verdict = gate._verdict_dict(run_info, cfg["threshold"], store.allowed_ids(str(root)), executable=True)
     by_id = {m.id: extra.get(id(m), {}) for m in run_info["mutants"]}
     for s in verdict["survivors"]:
         s.update(by_id.get(s["id"], {}))

@@ -83,6 +83,7 @@ For any language with a test command. Claude reads the code and writes mutations
 
 - `mutate` applies each mutation in turn, runs the project's tests, and restores the file byte for byte. The test command is detected from the project (`cargo test`, `go test ./...`, `mvn -q test`, `./gradlew test`, `dotnet test`, `sbt test`, `npm test`, pytest, `bundle exec rspec`, `vendor/bin/phpunit`, `ctest`) or given with `--test-cmd`; a manifest cannot contain a command, so the command that runs is always the one you approve.
 - Before mutating a file, its original bytes go to a journal in `~/.config/mutation-gate/state/journal/`. A killed run is undone at the next run, at session start, at the end of a turn, or with `mutation-gate restore`.
+- When no mutation could be applied (every `find` missing or ambiguous, or the time budget used up before the first one), the run is `UNVERIFIED` and exits 2: nothing was measured.
 - `verify` checks a new test the way sabotage does: it must pass on clean code, fail on the mutation, and kill at least one sibling mutation of the same function, so a test written to fit one mutant is rejected.
 - A survivor only counts in the skill's report when Claude can name an input that gives a wrong result; otherwise it is treated as an equivalent mutant.
 
